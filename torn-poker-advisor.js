@@ -1238,7 +1238,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     if (r.rows.length === 0) {
       card.append(make(doc, "div", "tp-review-none", "No advice or actions were recorded for this hand."));
     } else {
-      const list = make(doc, "ol", "tp-review-rows");
+      const list2 = make(doc, "ol", "tp-review-rows");
       for (const row of r.rows) {
         const li = make(doc, "li", "tp-review-row");
         const street = make(doc, "div", "tp-review-street");
@@ -1254,9 +1254,9 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           did.append(m);
         }
         li.append(street, advice, did);
-        list.append(li);
+        list2.append(li);
       }
-      card.append(list);
+      card.append(list2);
     }
     if (r.runout) {
       const line = make(doc, "div", "tp-review-line");
@@ -1614,21 +1614,21 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           reason.style.marginTop = "6px";
           box.append(reason);
           if (a.detail.length > 0) {
-            const list = el2("ul");
-            for (const d of a.detail) list.append(el2("li", void 0, d));
-            list.style.display = "none";
-            list.id = "tp-reasons";
+            const list2 = el2("ul");
+            for (const d of a.detail) list2.append(el2("li", void 0, d));
+            list2.style.display = "none";
+            list2.id = "tp-reasons";
             const more = el2("button", "tp-btn", "Show Reasons");
             more.type = "button";
             more.setAttribute("aria-expanded", "false");
-            more.setAttribute("aria-controls", list.id);
+            more.setAttribute("aria-controls", list2.id);
             more.addEventListener("click", guard2("reasons toggle", () => {
-              const open = list.style.display === "none";
-              list.style.display = open ? "" : "none";
+              const open = list2.style.display === "none";
+              list2.style.display = open ? "" : "none";
               more.textContent = open ? "Hide Reasons" : "Show Reasons";
               more.setAttribute("aria-expanded", String(open));
             }));
-            box.append(more, list);
+            box.append(more, list2);
           }
           const chip = el2("div", "tp-chip", `${a.confidence} confidence`);
           chip.style.color = a.confidence === "high" ? THEME.good : a.confidence === "medium" ? THEME.warning : THEME.bad;
@@ -1654,7 +1654,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       sec.append(badge, el2("div", "tp-muted", `${hero.hands} hands${hero.hands < LOW_SAMPLE ? " \xB7 low sample" : ""}`));
       if (style2 !== "Unknown") sec.append(el2("div", "tp-style-about", STYLES[style2].about));
       const r = rates(hero);
-      const list = el2("div", "tp-stats");
+      const list2 = el2("div", "tp-stats");
       for (const key of ["vpip", "pfr", "threeBet", "af", "foldToRaise", "wtsd"]) {
         const info = STATS[key];
         const v = verdict(key, r[key]);
@@ -1670,9 +1670,9 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         const note = el2("div", "tp-stat-note", hint ? `${hint} Good: ${goodRange(key)}` : `Good: ${goodRange(key)}`);
         if (hint) note.style.color = THEME.warning;
         item.append(top, note, el2("div", "tp-stat-note", info.help));
-        list.append(item);
+        list2.append(item);
       }
-      sec.append(list);
+      sec.append(list2);
       if (hero.hands < MIN_HANDS_FOR_STYLE) sec.append(el2("div", "tp-muted", `Style shows after ${MIN_HANDS_FOR_STYLE} hands`));
       return sec;
     }
@@ -2414,8 +2414,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   var COMBO_CLASS = PAIRS.map(([a, b]) => handClass(a, b));
   var CLASS_COMBOS = /* @__PURE__ */ new Map();
   COMBO_CLASS.forEach((cls, i) => {
-    const list = CLASS_COMBOS.get(cls);
-    if (list) list.push(i);
+    const list2 = CLASS_COMBOS.get(cls);
+    if (list2) list2.push(i);
     else CLASS_COMBOS.set(cls, [i]);
   });
   function topPercent(pct5) {
@@ -2629,6 +2629,56 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return wrap;
   }
 
+  // src/ui/range-read.ts
+  var RANGE_READ_RULES = [
+    ".tp-rr{margin:6px 0 2px;font-size:12px;line-height:1.4;color:#ddd;font-variant-numeric:tabular-nums}",
+    ".tp-rr p{margin:0 0 3px;overflow-wrap:break-word}",
+    ".tp-rr-hands{font-weight:bold}",
+    ".tp-rr-item{white-space:nowrap}",
+    ".tp-rr-note{color:#aaa}"
+  ];
+  var BASIS = "based on how they\u2019ve played";
+  function list(names) {
+    return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+  }
+  function handsText(h) {
+    return h.kind === "likely" ? `Likely ${h.names[0]} (${h.pct}%)` : `Most likely: ${list(h.names)} (${h.pct}%)`;
+  }
+  function rangeReadView(doc, read, opts = {}) {
+    const { name, explainSpread = false } = opts;
+    const wrap = doc.createElement("div");
+    wrap.className = "tp-rr";
+    const line = (cls, text) => {
+      const p = doc.createElement("p");
+      p.className = cls;
+      p.textContent = text;
+      return p;
+    };
+    if (read.hands) {
+      const text = handsText(read.hands);
+      wrap.append(line("tp-rr-hands", `${name ? `${name}: ${text[0].toLowerCase()}${text.slice(1)}` : text}, ${BASIS}`));
+    } else if (explainSpread) {
+      wrap.append(line("tp-rr-note", "Too spread out to name a likely hand."));
+    }
+    const shown = read.buckets?.filter((b) => b.pct > 0);
+    if (shown?.length) {
+      const p = doc.createElement("p");
+      p.className = "tp-rr-buckets";
+      p.append(`${name ? `${name} probably has` : "On this board they probably have"}: `);
+      shown.forEach((b, i) => {
+        const item = doc.createElement("span");
+        item.className = "tp-rr-item";
+        item.dataset.bucket = b.key;
+        item.textContent = `${b.label} ${b.pct}%`;
+        if (i > 0) p.append(" \xB7 ");
+        p.append(item);
+      });
+      wrap.append(p);
+      wrap.append(line("tp-rr-note", `An estimate ${BASIS}, not a certainty.`));
+    }
+    return wrap;
+  }
+
   // src/ui/profile-cards.ts
   var CARD_WIDTH = 250;
   var TAG_HEIGHT = 18;
@@ -2690,6 +2740,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
 #${CARDS_ID} .tp-stat.tp-stat-wrap span{white-space:normal}
 #${CARDS_ID} .tp-stat .tp-stat-n{flex-basis:100%;white-space:normal;font-variant-numeric:tabular-nums}
 ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
+${RANGE_READ_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
 ${SHARED_CSS}${FOCUS_CSS}`;
   var states = /* @__PURE__ */ new WeakMap();
   var signatures = /* @__PURE__ */ new WeakMap();
@@ -2794,11 +2845,10 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       about,
       stats,
       helpList(doc, "What these numbers mean", helps),
-      rangeGrid(doc, p.liveRange ?? generalRange(s), p.liveRange !== void 0),
-      tip,
-      labelPicker(doc, p),
-      noteBox(doc, p)
+      rangeGrid(doc, p.liveRange ?? generalRange(s), p.liveRange !== void 0)
     );
+    if (p.liveRange !== void 0 && p.liveRead) pop.append(rangeReadView(doc, p.liveRead, { explainSpread: true }));
+    pop.append(tip, labelPicker(doc, p), noteBox(doc, p));
     pop.append(betSizeList(doc, s?.betSizes));
     const shows = showdownList(doc, s?.showdowns ?? []);
     if (shows) pop.append(shows);
@@ -2808,7 +2858,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     tag2.setAttribute("aria-controls", pop.id);
     tag2.setAttribute("aria-expanded", String(wrap.classList.contains("tp-open")));
     const sep = () => el2("span", "tp-tag-sep", " \xB7 ");
-    const handsText = `${hands} ${hands === 1 ? "hand" : "hands"}`;
+    const handsText2 = `${hands} ${hands === 1 ? "hand" : "hands"}`;
     const label = s?.label;
     if (label) {
       const chip = el2("span", "tp-tag-label", LABELS2[label].name);
@@ -2820,7 +2870,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       const plays = `plays ${Math.round(r.vpip)}%`;
       tag2.append(el2("span", "tp-tag-style", STYLES[style].short), sep(), el2("span", "tp-tag-rates", plays));
       if (early) tag2.append(sep(), el2("span", "tp-tag-hands", "early read"));
-      tag2.title = `${p.name}: ${STYLES[style].about} Plays ${Math.round(r.vpip)}% of hands, raises ${formatStat("pfr", r.pfr)} before the flop, over ${handsText}.${early ? " Early read: more hands will sharpen it." : ""}${note} Click for profile.`;
+      tag2.title = `${p.name}: ${STYLES[style].about} Plays ${Math.round(r.vpip)}% of hands, raises ${formatStat("pfr", r.pfr)} before the flop, over ${handsText2}.${early ? " Early read: more hands will sharpen it." : ""}${note} Click for profile.`;
       tag2.setAttribute("aria-label", tag2.title.replace(" Click for profile.", " Opens the profile."));
     } else {
       tag2.append(el2("span", "tp-tag-style", "New player"));
@@ -2931,14 +2981,14 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     }
     return wrap;
   }
-  function showdownList(doc, list) {
-    if (list.length === 0) return null;
+  function showdownList(doc, list2) {
+    if (list2.length === 0) return null;
     const wrap = doc.createElement("div");
     const title = doc.createElement("div");
     title.className = "tp-sec";
-    title.textContent = `Hands they showed (last ${list.length})`;
+    title.textContent = `Hands they showed (last ${list2.length})`;
     wrap.append(title);
-    for (const sd of list) {
+    for (const sd of list2) {
       const row = doc.createElement("div");
       row.className = "tp-sd";
       const cards = doc.createElement("div");
@@ -3153,13 +3203,13 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   function buildKeyLegend(doc, enabled, onToggle) {
     const wrap = doc.createElement("div");
     wrap.className = "tp-keys";
-    const list = doc.createElement("span");
-    list.className = "tp-keys-list";
-    list.append("Keys: ");
+    const list2 = doc.createElement("span");
+    list2.className = "tp-keys-list";
+    list2.append("Keys: ");
     BET_KEYS.forEach((k, i) => {
       const kbd = doc.createElement("kbd");
       kbd.textContent = k.key.toUpperCase();
-      list.append(kbd, ` ${k.label}${i < BET_KEYS.length - 1 ? " \xB7 " : ""}`);
+      list2.append(kbd, ` ${k.label}${i < BET_KEYS.length - 1 ? " \xB7 " : ""}`);
     });
     const btn = doc.createElement("button");
     btn.type = "button";
@@ -3168,7 +3218,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     const paint = () => {
       btn.setAttribute("aria-pressed", String(on));
       btn.textContent = on ? "Shortcuts on" : "Shortcuts off";
-      list.hidden = !on;
+      list2.hidden = !on;
     };
     btn.addEventListener("click", () => {
       on = !on;
@@ -3176,7 +3226,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       onToggle(on);
     });
     paint();
-    wrap.append(list, btn);
+    wrap.append(list2, btn);
     return wrap;
   }
 
@@ -3201,6 +3251,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
 #${ROW_ID}.tp-preview{border-top-style:dashed;border-top-color:rgba(255,255,255,.3)}
 #${ROW_ID} .tp-hud-label{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#aaa;margin-right:6px}
 #${ROW_ID} .tp-hud-meta{color:#aaa;font-size:12px;margin-left:6px}
+${RANGE_READ_RULES.map((r) => `#${ROW_ID} ${r}`).join("\n")}
 /* Slider styled like Torn's own controls: one row, recessed track, grey fader knob, inset readout */
 /* Torn's own bet box shows the amount, so only the label and track show here */
 #${ROW_ID} .tp-bet{display:grid;grid-template-columns:auto 1fr;grid-template-areas:"title track";align-items:center;column-gap:10px;margin:6px 0 2px;padding:0;border:0;background:none}
@@ -3279,6 +3330,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       act.style.color = actionColor(a.action);
       line.append(label, act);
       row.append(line, buildMeters(doc, a));
+      if (a.bettorRead && !preview) row.append(rangeReadView(doc, a.bettorRead.read, { name: a.bettorRead.name }));
       if (bet && !preview) {
         row.append(buildBetSlider(doc, a, bet, { chips: false }));
         row.append(buildKeyLegend(doc, keysOn, (on) => {
@@ -4735,6 +4787,78 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return out;
   }
 
+  // src/advice/range-read.ts
+  var NAMING = { single: 0.35, topThree: 0.6 };
+  var BUCKET_LABELS = {
+    strong: "a strong hand",
+    topPair: "top pair or an overpair",
+    weakPair: "a weaker pair",
+    draw: "a draw",
+    nothing: "nothing much"
+  };
+  var BUCKET_ORDER = ["strong", "topPair", "weakPair", "draw", "nothing"];
+  var STRONG_LABELS = ["Two pair", "Trips", "Set", "Straight", "Flush", "Full house", "Quads"];
+  var AT_LEAST_TWO_PAIR = ["Two pair", "Trips", "Straight", "Flush", "Full house", "Quads", "Straight flush"];
+  function bucketOf2(hole, board) {
+    const { label, category } = describeHand(hole, board);
+    const boardOnly = label.includes("on the board") || label.startsWith("Playing");
+    if (!boardOnly) {
+      if (category && AT_LEAST_TWO_PAIR.includes(category) && STRONG_LABELS.some((s) => label.startsWith(s))) return "strong";
+      if (label.startsWith("Top pair") || label.startsWith("Overpair")) return "topPair";
+      if (/^(Middle pair|Bottom pair|Underpair)/.test(label)) return "weakPair";
+    }
+    return findDraw(hole, board) ? "draw" : "nothing";
+  }
+  function roundTo100(shares) {
+    const floors = shares.map((s) => Math.floor(s * 100 + 1e-9));
+    let left = 100 - floors.reduce((a, b) => a + b, 0);
+    const order = shares.map((s, i) => [s * 100 - floors[i], i]).sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+    for (const [, i] of order) {
+      if (left-- <= 0) break;
+      floors[i]++;
+    }
+    return floors;
+  }
+  var mergedName = (hole) => {
+    const c = handClass(hole[0], hole[1]);
+    return c.length === 3 ? c.slice(0, 2) : c;
+  };
+  function nameHands(byName, total2) {
+    const top = [...byName].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    if (top[0][1] / total2 >= NAMING.single - 1e-9) {
+      return { kind: "likely", names: [top[0][0]], pct: Math.round(top[0][1] / total2 * 100) };
+    }
+    const sum2 = top.reduce((s, [, w]) => s + w, 0);
+    if (top.length >= 2 && sum2 / total2 >= NAMING.topThree - 1e-9) {
+      return { kind: "most", names: top.map(([n]) => n), pct: Math.round(sum2 / total2 * 100) };
+    }
+    return null;
+  }
+  function readRange(range, board, dead) {
+    const deadSet = /* @__PURE__ */ new Set([...dead, ...board]);
+    const byBucket = { strong: 0, topPair: 0, weakPair: 0, draw: 0, nothing: 0 };
+    const byName = /* @__PURE__ */ new Map();
+    const postflop = board.length >= 3;
+    let total2 = 0;
+    for (let i = 0; i < COMBOS; i++) {
+      const w = range[i];
+      if (!(w > 0)) continue;
+      const hole = comboCards(i);
+      if (deadSet.has(hole[0]) || deadSet.has(hole[1])) continue;
+      total2 += w;
+      const n = mergedName(hole);
+      byName.set(n, (byName.get(n) ?? 0) + w);
+      if (postflop) byBucket[bucketOf2(hole, board)] += w;
+    }
+    if (!(total2 > 0)) return null;
+    let buckets = null;
+    if (postflop) {
+      const pcts = roundTo100(BUCKET_ORDER.map((k) => byBucket[k] / total2));
+      buckets = BUCKET_ORDER.map((key, i) => ({ key, label: BUCKET_LABELS[key], pct: pcts[i] }));
+    }
+    return { buckets, hands: nameHands(byName, total2) };
+  }
+
   // src/advice/advise.ts
   async function advise(ctx, opts = {}) {
     const preflop = ctx.street === "preflop";
@@ -4751,6 +4875,9 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       eq = await run(ranges);
       if (eq.samples === 0) throw new Error("No equity estimate");
     }
+    const bettor = !fellBack && ctx.toCall > 0 ? ctx.lastAggressor : null;
+    const bettorIdx = bettor ? ctx.villains.indexOf(bettor) : -1;
+    const bettorRead = bettorIdx >= 0 ? readRange(ranges[bettorIdx], ctx.board, [...ctx.heroCards, ...ctx.board]) : null;
     if (!fellBack) opts.onRanges?.(new Map(ctx.villains.map((v, i) => [v.userID, ranges[i]])));
     const decided = preflop ? decidePreflop(ctx, eq) : decidePostflop(ctx, eq);
     const rangeLines = ctx.villains.map((v, i) => {
@@ -4762,7 +4889,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       ...decided,
       detail: [...header, ...rangeLines, ...decided.detail],
       strength: handStrength(ctx.heroCards, ctx.board),
-      opponents: ctx.villains.length
+      opponents: ctx.villains.length,
+      ...bettor && bettorRead ? { bettorRead: { name: bettor.name, read: bettorRead } } : {}
     }, ctx);
   }
 
@@ -4815,8 +4943,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       line: describePlay(hand.actions, userID)
     };
   }
-  function addShowdown(list, sd) {
-    const rest = (list ?? []).filter((x) => sd.handId === "" || x.handId !== sd.handId);
+  function addShowdown(list2, sd) {
+    const rest = (list2 ?? []).filter((x) => sd.handId === "" || x.handId !== sd.handId);
     return [sd, ...rest].slice(0, MAX_SHOWDOWNS);
   }
 
@@ -5325,6 +5453,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           name: q.name,
           stats: profiles.get(q.userID),
           liveRange: liveRanges?.handId === state.handId ? liveRanges.ranges.get(q.userID) : void 0,
+          liveRead: liveRanges?.handId === state.handId ? liveRanges.reads.get(q.userID) : void 0,
           onNote: guard2("save note", (text) => {
             profiles.setNote(q.userID, q.name, text);
             renderCards();
@@ -5385,7 +5514,13 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       if (!preview || status !== "advice") setStatus("thinking");
       const onRanges = (ranges) => {
         if (controller !== ac) return;
-        liveRanges = { handId, ranges };
+        const dead = [...ctx.heroCards, ...ctx.board];
+        const reads = /* @__PURE__ */ new Map();
+        for (const [id, r] of ranges) {
+          const read = readRange(r, ctx.board, dead);
+          if (read) reads.set(id, read);
+        }
+        liveRanges = { handId, ranges, reads };
         renderCards();
       };
       advise(ctx, { signal: ac.signal, rng: deps.rng, onRanges }).then(
