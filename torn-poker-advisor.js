@@ -99,8 +99,12 @@
     return { hands: hands.length, net: hands.reduce((n, h) => n + h.net, 0), bb };
   }
   var isAggressive = (a) => a === "bet" || a === "raise" || a === "allin";
+  var CLEAR_GAP = 8;
+  function shortfall(a) {
+    return a.equity === void 0 || a.needed === void 0 ? null : a.needed - a.equity;
+  }
   function leakSpots(h) {
-    const spots = { passedUp: 0, calledFold: 0 };
+    const spots = { passedUp: 0, calledFold: 0, calledFoldBad: 0 };
     const seen = /* @__PURE__ */ new Map();
     for (const a of h.advice) {
       const i = seen.get(a.street) ?? 0;
@@ -108,7 +112,10 @@
       const t = h.taken.filter((x) => x.street === a.street)[i];
       if (!t) continue;
       if (isAggressive(a.action) && (t.action === "check" || t.action === "call")) spots.passedUp++;
-      if (a.action === "fold" && t.action === "call") spots.calledFold++;
+      if (a.action === "fold" && t.action === "call") {
+        spots.calledFold++;
+        if ((shortfall(a) ?? 0) >= CLEAR_GAP) spots.calledFoldBad++;
+      }
     }
     return spots;
   }
@@ -120,6 +127,7 @@
     return {
       passedUp: group("passedUp"),
       calledFold: group("calledFold"),
+      calledFoldBad: group("calledFoldBad"),
       followed: tally(hands.filter((h) => h.followed === true))
     };
   }
@@ -178,181 +186,12 @@
     return { state: { loss: lossNow, win: winNow }, fired };
   }
 
-  // src/ui/glossary.ts
-  var STATS = {
-    vpip: {
-      label: "Hands played",
-      abbr: "VPIP",
-      help: "How often you put money in before the flop by choice (blinds don\u2019t count).",
-      good: [18, 28],
-      low: "Very tight: you can open up a little.",
-      high: "Playing too many hands."
-    },
-    pfr: {
-      label: "Raised before the flop",
-      abbr: "PFR",
-      help: "How often you raise before the flop.",
-      good: [14, 22],
-      low: "Raise more of the hands you play instead of calling.",
-      high: "Raising a lot: make sure the hands back it up."
-    },
-    threeBet: {
-      label: "Re-raised a raise",
-      abbr: "3-bet",
-      help: "When someone raised before you, how often you raised again.",
-      good: [5, 10],
-      low: "Re-raise your best hands rather than calling.",
-      high: "Re-raising a lot: good players will push back."
-    },
-    af: {
-      label: "Aggression",
-      abbr: "AF",
-      ratio: true,
-      help: "After the flop: bets and raises for every call. Below 1.5 is passive.",
-      good: [2, 4],
-      low: "Passive: bet and raise more, call less.",
-      high: "Very aggressive: pick your bluffs."
-    },
-    foldToRaise: {
-      label: "Folded when raised",
-      abbr: "Fold to raise",
-      help: "When someone raised you, how often you folded.",
-      good: [35, 60],
-      low: "Hard to push off a hand: fold more weak hands to raises.",
-      high: "Easy to push around: players can bluff you off hands."
-    },
-    cbet: {
-      label: "Bets flop after raising",
-      abbr: "Continuation bet",
-      help: "After you raised before the flop, how often you bet the flop when nobody bet before you.",
-      good: [50, 70],
-      low: "Giving up too often after raising: bet the flop more when checked to.",
-      high: "Betting the flop every time: check your weak hands sometimes."
-    },
-    foldToCbet: {
-      label: "Folds to follow-up bet",
-      abbr: "Fold to continuation bet",
-      help: "When the player who raised before the flop bets the flop, how often you fold.",
-      good: [35, 55],
-      low: "Hard to push off a hand: fold more weak hands to a flop bet.",
-      high: "Easy to bluff: players bet the flop knowing you will fold."
-    },
-    wtsd: {
-      label: "Went to showdown",
-      abbr: "WTSD",
-      help: "Of the hands where you saw the flop, how often you got to the end.",
-      good: [24, 33],
-      low: "Giving up often after the flop.",
-      high: "Calling down too much: fold more by the river."
-    }
-  };
-  function verdict(key, value) {
-    const g = STATS[key].good;
-    if (value === null || !g) return "unknown";
-    return value < g[0] ? "low" : value > g[1] ? "high" : "good";
-  }
-  function formatStat(key, value) {
-    if (value === null) return "\u2013";
-    return STATS[key].ratio ? value.toFixed(1) : `${Math.round(value)}%`;
-  }
-  function goodRange(key) {
-    const g = STATS[key].good;
-    if (!g) return "";
-    return STATS[key].ratio ? `${g[0]}\u2013${g[1]}` : `${g[0]}\u2013${g[1]}%`;
-  }
-  var STYLES = {
-    "Tight-Aggressive": { short: "Solid", about: "Plays few hands and bets them hard. The style that wins." },
-    Aggro: { short: "Aggro", about: "Plays lots of hands and raises often." },
-    Maniac: { short: "Maniac", about: "Bets and raises with almost anything." },
-    "Calling station": { short: "Caller", about: "Plays lots of hands and calls rather than raises." },
-    Rock: { short: "Rock", about: "Plays very few hands and rarely raises without a big one." },
-    Unknown: { short: "Learning", about: "Not enough hands seen to judge yet." }
-  };
-
-  // src/results/progress.ts
-  var MIN_SESSION_HANDS = 20;
-  var SPARK_SESSIONS = 10;
-  var ROLLING_SESSIONS = 5;
-  var PROGRESS_KEYS = ["vpip", "pfr", "af", "followed"];
-  var isRaise = (a) => a === "bet" || a === "raise" || a === "allin";
-  function handCounts(h) {
-    const pre = h.taken.filter((t) => t.street === "preflop");
-    const post = h.taken.filter((t) => t.street !== "preflop");
-    return {
-      preflopHands: pre.length > 0 ? 1 : 0,
-      played: pre.some((t) => t.action === "call" || isRaise(t.action)) ? 1 : 0,
-      raised: pre.some((t) => isRaise(t.action)) ? 1 : 0,
-      aggressive: post.filter((t) => isRaise(t.action)).length,
-      calls: post.filter((t) => t.action === "call").length,
-      advisedHands: h.followed === null ? 0 : 1,
-      followedHands: h.followed === true ? 1 : 0
-    };
-  }
-  function sum(hands) {
-    const c = { preflopHands: 0, played: 0, raised: 0, aggressive: 0, calls: 0, advisedHands: 0, followedHands: 0 };
-    for (const h of hands) {
-      const k = handCounts(h);
-      for (const key of Object.keys(c)) c[key] += k[key];
-    }
-    return c;
-  }
-  function playStats(hands) {
-    const c = sum(hands);
-    const pct5 = (n, d) => d === 0 ? null : n / d * 100;
-    return {
-      vpip: pct5(c.played, c.preflopHands),
-      pfr: pct5(c.raised, c.preflopHands),
-      af: c.calls === 0 ? null : c.aggressive / c.calls,
-      followed: pct5(c.followedHands, c.advisedHands)
-    };
-  }
-  var LABELS = {
-    vpip: STATS.vpip.label,
-    pfr: STATS.pfr.label,
-    af: STATS.af.label,
-    followed: "Following the advice"
-  };
-  function formatProgress(key, v) {
-    if (key !== "followed") return formatStat(key, v);
-    return v === null ? "\u2013" : `${Math.round(v)}%`;
-  }
-  function trendText(key, values) {
-    if (values.length < 3) return `Needs at least 3 sessions of ${MIN_SESSION_HANDS}+ hands to show a trend.`;
-    const window2 = values.slice(-ROLLING_SESSIONS);
-    const from = window2[0];
-    const to = window2[window2.length - 1];
-    const step = key === "af" ? 0.2 : 3;
-    const move = Math.abs(to - from) < step ? `${LABELS[key]} is steady at ${formatProgress(key, to)}` : `${LABELS[key]} is ${to > from ? "up" : "down"} from ${formatProgress(key, from)} to ${formatProgress(key, to)}`;
-    const good = key === "followed" ? null : STATS[key].good;
-    const range = good && key !== "followed" ? `, ${to < good[0] ? "still below" : to > good[1] ? "above" : "inside"} the ${goodRange(key)} target` : "";
-    return `${move} over your last ${window2.length} sessions${range}.`;
-  }
-  function computeProgress(hands) {
-    const all = splitSessions(hands);
-    const long = all.filter((s) => s.length >= MIN_SESSION_HANDS);
-    const sessions = long.slice(-SPARK_SESSIONS).map((s) => ({ start: s[0].at, hands: s.length, stats: playStats(s) }));
-    const pooled = playStats(long.slice(-ROLLING_SESSIONS).flat());
-    const stats = PROGRESS_KEYS.map((key) => {
-      const values = sessions.map((s) => s.stats[key]).filter((v) => v !== null);
-      return {
-        key,
-        label: LABELS[key],
-        values,
-        latest: values.length > 0 ? values[values.length - 1] : null,
-        rolling: pooled[key],
-        good: key === "followed" ? null : STATS[key].good,
-        trend: trendText(key, values)
-      };
-    });
-    return { sessions, skipped: all.length - long.length, stats };
-  }
-
   // src/profiles/stats.ts
   var HALF_LIFE_HANDS = 300;
   var MIN_HANDS_FOR_STYLE = 15;
   var LOW_SAMPLE = 30;
   var PRIOR_WEIGHT = 10;
-  var PRIOR = { vpip: 24, pfr: 14, threeBet: 5, foldToRaise: 50, wtsd: 28, af: 1.5, cbet: 55, foldToCbet: 45 };
+  var DEFAULT_PRIOR = { vpip: 24, pfr: 14, threeBet: 5, foldToRaise: 50, wtsd: 28, af: 1.5, cbet: 55, foldToCbet: 45 };
   var MIN_CBET_OPPS = 8;
   var AF_PRIOR_ACTIONS = 4;
   var DECAY = 0.5 ** (1 / HALF_LIFE_HANDS);
@@ -500,22 +339,22 @@
       foldToCbet: pct(s.foldToCbet ?? zero())
     };
   }
-  function blendedRates(s) {
-    const blend = (c, prior) => (c.n + PRIOR_WEIGHT * prior / 100) / (c.d + PRIOR_WEIGHT) * 100;
+  function blendedRates(s, prior = DEFAULT_PRIOR) {
+    const blend = (c, prior2) => (c.n + PRIOR_WEIGHT * prior2 / 100) / (c.d + PRIOR_WEIGHT) * 100;
     return {
-      vpip: blend(s.vpip, PRIOR.vpip),
-      pfr: blend(s.pfr, PRIOR.pfr),
-      threeBet: blend(s.threeBet, PRIOR.threeBet),
-      foldToRaise: blend(s.foldToRaise, PRIOR.foldToRaise),
-      wtsd: blend(s.wtsd, PRIOR.wtsd),
-      cbet: blend(s.cbet ?? zero(), PRIOR.cbet),
-      foldToCbet: blend(s.foldToCbet ?? zero(), PRIOR.foldToCbet),
-      af: (s.postAggr + AF_PRIOR_ACTIONS * PRIOR.af) / (s.postCalls + AF_PRIOR_ACTIONS)
+      vpip: blend(s.vpip, prior.vpip),
+      pfr: blend(s.pfr, prior.pfr),
+      threeBet: blend(s.threeBet, prior.threeBet),
+      foldToRaise: blend(s.foldToRaise, prior.foldToRaise),
+      wtsd: blend(s.wtsd, prior.wtsd),
+      cbet: blend(s.cbet ?? zero(), prior.cbet),
+      foldToCbet: blend(s.foldToCbet ?? zero(), prior.foldToCbet),
+      af: (s.postAggr + AF_PRIOR_ACTIONS * prior.af) / (s.postCalls + AF_PRIOR_ACTIONS)
     };
   }
   var isEarlyRead = (s) => s.hands < LOW_SAMPLE;
-  function readStyle(s) {
-    return s.hands < 1 ? "Unknown" : styleOf(blendedRates(s));
+  function readStyle(s, prior = DEFAULT_PRIOR) {
+    return s.hands < 1 ? "Unknown" : styleOf(blendedRates(s, prior));
   }
   function classify(s) {
     if (s.hands < MIN_HANDS_FOR_STYLE) return "Unknown";
@@ -547,6 +386,245 @@
       case "Unknown":
         return "Not enough hands yet.";
     }
+  }
+
+  // src/profiles/norms.ts
+  var MIN_POOL_OPPS = 200;
+  var POOL_SHRINK = 100;
+  var PLAYER_CAP = 50;
+  var COUNTERS = ["vpip", "pfr", "threeBet", "foldToRaise", "wtsd", "cbet", "foldToCbet"];
+  var DEFAULT_NORMS = {
+    prior: DEFAULT_PRIOR,
+    opps: { vpip: 0, pfr: 0, threeBet: 0, foldToRaise: 0, wtsd: 0, af: 0, cbet: 0, foldToCbet: 0 },
+    players: 0
+  };
+  var isLearned = (n, key) => n.opps[key] >= MIN_POOL_OPPS;
+  var capped = (n, d) => {
+    const w = d > PLAYER_CAP ? PLAYER_CAP / d : 1;
+    return [n * w, d * w];
+  };
+  function learnNorms(profiles, heroId) {
+    const sum2 = Object.fromEntries(COUNTERS.map((k) => [k, { n: 0, d: 0 }]));
+    let aggr = 0;
+    let calls = 0;
+    let players = 0;
+    for (const p of profiles) {
+      if (p.userID === heroId || p.hands <= 0) continue;
+      players += 1;
+      for (const k of COUNTERS) {
+        const c = p[k];
+        if (!c || !(c.d > 0)) continue;
+        const [n, d] = capped(c.n, c.d);
+        sum2[k].n += n;
+        sum2[k].d += d;
+      }
+      const [a, total2] = capped(p.postAggr, p.postAggr + p.postCalls);
+      aggr += a;
+      calls += total2 - a;
+    }
+    const opps = { ...DEFAULT_NORMS.opps, af: aggr + calls };
+    const prior = { ...DEFAULT_PRIOR };
+    for (const k of COUNTERS) {
+      const { n, d } = sum2[k];
+      opps[k] = d;
+      if (d >= MIN_POOL_OPPS) prior[k] = (n + POOL_SHRINK * DEFAULT_PRIOR[k] / 100) / (d + POOL_SHRINK) * 100;
+    }
+    if (opps.af >= MIN_POOL_OPPS) {
+      const def = DEFAULT_PRIOR.af;
+      prior.af = (aggr + POOL_SHRINK * def / (1 + def)) / (calls + POOL_SHRINK / (1 + def));
+    }
+    return { prior, opps, players };
+  }
+
+  // src/ui/glossary.ts
+  var STATS = {
+    vpip: {
+      label: "Hands played",
+      abbr: "VPIP",
+      help: "How often you put money in before the flop by choice (blinds don\u2019t count).",
+      good: [18, 28],
+      low: "Very tight: you can open up a little.",
+      high: "Playing too many hands."
+    },
+    pfr: {
+      label: "Raised before the flop",
+      abbr: "PFR",
+      help: "How often you raise before the flop.",
+      good: [14, 22],
+      low: "Raise more of the hands you play instead of calling.",
+      high: "Raising a lot: make sure the hands back it up."
+    },
+    threeBet: {
+      label: "Re-raised a raise",
+      abbr: "3-bet",
+      help: "When someone raised before you, how often you raised again.",
+      good: [5, 10],
+      low: "Re-raise your best hands rather than calling.",
+      high: "Re-raising a lot: good players will push back."
+    },
+    af: {
+      label: "Aggression",
+      abbr: "AF",
+      ratio: true,
+      help: "After the flop: bets and raises for every call. Below 1.5 is passive.",
+      good: [2, 4],
+      low: "Passive: bet and raise more, call less.",
+      high: "Very aggressive: pick your bluffs."
+    },
+    foldToRaise: {
+      label: "Folded when raised",
+      abbr: "Fold to raise",
+      help: "When someone raised you, how often you folded.",
+      good: [35, 60],
+      low: "Hard to push off a hand: fold more weak hands to raises.",
+      high: "Easy to push around: players can bluff you off hands."
+    },
+    cbet: {
+      label: "Bets flop after raising",
+      abbr: "Continuation bet",
+      help: "After you raised before the flop, how often you bet the flop when nobody bet before you.",
+      good: [50, 70],
+      low: "Giving up too often after raising: bet the flop more when checked to.",
+      high: "Betting the flop every time: check your weak hands sometimes."
+    },
+    foldToCbet: {
+      label: "Folds to follow-up bet",
+      abbr: "Fold to continuation bet",
+      help: "When the player who raised before the flop bets the flop, how often you fold.",
+      good: [35, 55],
+      low: "Hard to push off a hand: fold more weak hands to a flop bet.",
+      high: "Easy to bluff: players bet the flop knowing you will fold."
+    },
+    wtsd: {
+      label: "Went to showdown",
+      abbr: "WTSD",
+      help: "Of the hands where you saw the flop, how often you got to the end.",
+      good: [24, 33],
+      low: "Giving up often after the flop.",
+      high: "Calling down too much: fold more by the river."
+    }
+  };
+  function verdict(key, value) {
+    const g = STATS[key].good;
+    if (value === null || !g) return "unknown";
+    return value < g[0] ? "low" : value > g[1] ? "high" : "good";
+  }
+  function formatStat(key, value) {
+    if (value === null) return "\u2013";
+    return STATS[key].ratio ? value.toFixed(1) : `${Math.round(value)}%`;
+  }
+  function goodRange(key) {
+    const g = STATS[key].good;
+    if (!g) return "";
+    return STATS[key].ratio ? `${g[0]}\u2013${g[1]}` : `${g[0]}\u2013${g[1]}%`;
+  }
+  var STYLES = {
+    "Tight-Aggressive": { short: "Solid", about: "Plays few hands and bets them hard. The style that wins." },
+    Aggro: { short: "Aggro", about: "Plays lots of hands and raises often." },
+    Maniac: { short: "Maniac", about: "Bets and raises with almost anything." },
+    "Calling station": { short: "Caller", about: "Plays lots of hands and calls rather than raises." },
+    Rock: { short: "Rock", about: "Plays very few hands and rarely raises without a big one." },
+    Unknown: { short: "Learning", about: "Not enough hands seen to judge yet." }
+  };
+  var NORM_WORDS = {
+    vpip: "Play {} of hands",
+    pfr: "Raise before the flop {}",
+    threeBet: "Re-raise a raise {}",
+    foldToRaise: "Fold when raised {}",
+    wtsd: "Reach showdown {} of the time they see a flop",
+    cbet: "Bet the flop after raising {}",
+    foldToCbet: "Fold to that flop bet {}",
+    af: "Bet or raise {} times for every call after the flop"
+  };
+  var NORM_ORDER = ["vpip", "pfr", "threeBet", "foldToRaise", "wtsd", "cbet", "foldToCbet", "af"];
+  var normValue = (key, v) => key === "af" ? v.toFixed(1) : `${v < 10 ? Number(v.toFixed(1)) : Math.round(v)}%`;
+  function normsText(n) {
+    const learned = NORM_ORDER.filter((k) => isLearned(n, k));
+    if (learned.length === 0) {
+      return { lead: "Not enough hands seen yet to learn how players at your tables play. Until then the advice assumes typical players.", items: [] };
+    }
+    const items = learned.map((k) => `${NORM_WORDS[k].replace("{}", normValue(k, n.prior[k]))} (typical ${normValue(k, DEFAULT_PRIOR[k])})`);
+    const players = `${n.players} ${n.players === 1 ? "player" : "players"}`;
+    const rest = learned.length < NORM_ORDER.length ? " The rest use typical values until more hands are seen." : "";
+    return { lead: `From ${players} you\u2019ve sat with. The advice starts every player here, then follows their own play.${rest}`, items };
+  }
+
+  // src/results/progress.ts
+  var MIN_SESSION_HANDS = 20;
+  var SPARK_SESSIONS = 10;
+  var ROLLING_SESSIONS = 5;
+  var PROGRESS_KEYS = ["vpip", "pfr", "af", "followed"];
+  var isRaise = (a) => a === "bet" || a === "raise" || a === "allin";
+  function handCounts(h) {
+    const pre = h.taken.filter((t) => t.street === "preflop");
+    const post = h.taken.filter((t) => t.street !== "preflop");
+    return {
+      preflopHands: pre.length > 0 ? 1 : 0,
+      played: pre.some((t) => t.action === "call" || isRaise(t.action)) ? 1 : 0,
+      raised: pre.some((t) => isRaise(t.action)) ? 1 : 0,
+      aggressive: post.filter((t) => isRaise(t.action)).length,
+      calls: post.filter((t) => t.action === "call").length,
+      advisedHands: h.followed === null ? 0 : 1,
+      followedHands: h.followed === true ? 1 : 0
+    };
+  }
+  function sum(hands) {
+    const c = { preflopHands: 0, played: 0, raised: 0, aggressive: 0, calls: 0, advisedHands: 0, followedHands: 0 };
+    for (const h of hands) {
+      const k = handCounts(h);
+      for (const key of Object.keys(c)) c[key] += k[key];
+    }
+    return c;
+  }
+  function playStats(hands) {
+    const c = sum(hands);
+    const pct5 = (n, d) => d === 0 ? null : n / d * 100;
+    return {
+      vpip: pct5(c.played, c.preflopHands),
+      pfr: pct5(c.raised, c.preflopHands),
+      af: c.calls === 0 ? null : c.aggressive / c.calls,
+      followed: pct5(c.followedHands, c.advisedHands)
+    };
+  }
+  var LABELS = {
+    vpip: STATS.vpip.label,
+    pfr: STATS.pfr.label,
+    af: STATS.af.label,
+    followed: "Following the advice"
+  };
+  function formatProgress(key, v) {
+    if (key !== "followed") return formatStat(key, v);
+    return v === null ? "\u2013" : `${Math.round(v)}%`;
+  }
+  function trendText(key, values) {
+    if (values.length < 3) return `Needs at least 3 sessions of ${MIN_SESSION_HANDS}+ hands to show a trend.`;
+    const window2 = values.slice(-ROLLING_SESSIONS);
+    const from = window2[0];
+    const to = window2[window2.length - 1];
+    const step = key === "af" ? 0.2 : 3;
+    const move = Math.abs(to - from) < step ? `${LABELS[key]} is steady at ${formatProgress(key, to)}` : `${LABELS[key]} is ${to > from ? "up" : "down"} from ${formatProgress(key, from)} to ${formatProgress(key, to)}`;
+    const good = key === "followed" ? null : STATS[key].good;
+    const range = good && key !== "followed" ? `, ${to < good[0] ? "still below" : to > good[1] ? "above" : "inside"} the ${goodRange(key)} target` : "";
+    return `${move} over your last ${window2.length} sessions${range}.`;
+  }
+  function computeProgress(hands) {
+    const all = splitSessions(hands);
+    const long = all.filter((s) => s.length >= MIN_SESSION_HANDS);
+    const sessions = long.slice(-SPARK_SESSIONS).map((s) => ({ start: s[0].at, hands: s.length, stats: playStats(s) }));
+    const pooled = playStats(long.slice(-ROLLING_SESSIONS).flat());
+    const stats = PROGRESS_KEYS.map((key) => {
+      const values = sessions.map((s) => s.stats[key]).filter((v) => v !== null);
+      return {
+        key,
+        label: LABELS[key],
+        values,
+        latest: values.length > 0 ? values[values.length - 1] : null,
+        rolling: pooled[key],
+        good: key === "followed" ? null : STATS[key].good,
+        trend: trendText(key, values)
+      };
+    });
+    return { sessions, skipped: all.length - long.length, stats };
   }
 
   // src/ui/theme.ts
@@ -959,6 +1037,41 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return c & 3;
   }
 
+  // src/advice/position.ts
+  var OPEN_PCT = {
+    UTG: 12,
+    "UTG+1": 14,
+    MP: 17,
+    LJ: 20,
+    HJ: 25,
+    CO: 30,
+    BTN: 45,
+    SB: 40,
+    BB: 0
+  };
+  var FROM_BUTTON = ["BTN", "CO", "HJ", "LJ", "MP", "UTG+1", "UTG"];
+  function dealerIndex(seats, dealerSeat) {
+    let idx = -1;
+    for (let i = 0; i < seats.length; i++) if (seats[i] <= dealerSeat) idx = i;
+    return idx >= 0 ? idx : seats.length - 1;
+  }
+  function orderAfterDealer(seats, dealerSeat, seat) {
+    const i = seats.indexOf(seat);
+    if (i < 0) return -1;
+    const n = seats.length;
+    return (i - dealerIndex(seats, dealerSeat) - 1 + n) % n;
+  }
+  function positionOf(dealtInSeats, dealerSeat, seat) {
+    const n = dealtInSeats.length;
+    const order = orderAfterDealer(dealtInSeats, dealerSeat, seat);
+    if (order < 0) throw new Error("Seat not dealt in");
+    if (n <= 2) return order === n - 1 ? "BTN" : "BB";
+    if (order === 0) return "SB";
+    if (order === 1) return "BB";
+    const names = n === 3 ? ["BTN"] : ["UTG", ...FROM_BUTTON.slice(0, n - 3).reverse()];
+    return names[order - 2];
+  }
+
   // src/results/results.ts
   var KEY = "results";
   var SAVE_DELAY_MS = 3e4;
@@ -969,6 +1082,15 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   var num = (v) => typeof v === "number" && Number.isFinite(v);
   var STREETS = /* @__PURE__ */ new Set(["preflop", "flop", "turn", "river"]);
   var ACTIONS = /* @__PURE__ */ new Set(["fold", "check", "call", "bet", "raise", "allin"]);
+  var POSITIONS = /* @__PURE__ */ new Set(["UTG", "UTG+1", "MP", "LJ", "HJ", "CO", "BTN", "SB", "BB"]);
+  var optNum = (v) => v === void 0 || num(v);
+  var optPosition = (v) => v === void 0 || POSITIONS.has(v);
+  function isAdviceEntry(v) {
+    if (v === null || typeof v !== "object") return false;
+    const a = v;
+    const vs = a.vs;
+    return STREETS.has(a.street) && ACTIONS.has(a.action) && (a.amount === null || num(a.amount)) && [a.equity, a.needed, a.pot, a.toCall, a.stackBB, a.handTotalAfter].every(optNum) && optPosition(a.position) && (vs === void 0 || vs !== null && typeof vs === "object" && num(vs.userID) && typeof vs.name === "string");
+  }
   function isHeroHand(v) {
     if (v === null || typeof v !== "object") return false;
     const h = v;
@@ -977,13 +1099,17 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       const s = x;
       return STREETS.has(s.street) && ACTIONS.has(s.action);
     };
-    return typeof h.handId === "string" && (h.tableId === null || num(h.tableId)) && (h.bigBlind === void 0 || num(h.bigBlind) && h.bigBlind > 0) && (h.board === void 0 || Array.isArray(h.board) && h.board.length <= 5 && h.board.every(num)) && num(h.at) && (h.cards === null || Array.isArray(h.cards) && h.cards.length === 2 && h.cards.every(num)) && num(h.invested) && num(h.won) && num(h.net) && (h.followed === null || typeof h.followed === "boolean") && Array.isArray(h.taken) && h.taken.every(step) && Array.isArray(h.advice) && h.advice.every((a) => step(a) && (a.amount === null || num(a.amount)));
+    return typeof h.handId === "string" && (h.tableId === null || num(h.tableId)) && (h.bigBlind === void 0 || num(h.bigBlind) && h.bigBlind > 0) && (h.board === void 0 || Array.isArray(h.board) && h.board.length <= 5 && h.board.every(num)) && num(h.at) && (h.cards === null || Array.isArray(h.cards) && h.cards.length === 2 && h.cards.every(num)) && num(h.invested) && num(h.won) && num(h.net) && (h.followed === null || typeof h.followed === "boolean") && Array.isArray(h.taken) && h.taken.every(step) && Array.isArray(h.advice) && h.advice.every(isAdviceEntry) && optPosition(h.position);
   }
   function validHands(v) {
     if (v === null || typeof v !== "object") return null;
     const o = v;
     if (o.version !== 1 || !Array.isArray(o.hands)) return null;
     return o.hands.filter(isHeroHand);
+  }
+  function mainOpponent(ctx) {
+    const v = ctx.lastAggressor ?? (ctx.villains.length === 1 ? ctx.villains[0] : null);
+    return v ? { userID: v.userID, name: v.name } : null;
   }
   var Results = class {
     constructor(store2) {
@@ -1001,7 +1127,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     /** advice per hand, in the order it was given */
     pending = /* @__PURE__ */ new Map();
     timer = null;
-    recordAdvice(handId, street, a) {
+    /** `ctx` is the decision the advice answered; without it only the action is stored */
+    recordAdvice(handId, street, a, ctx) {
       let advice = this.pending.get(handId);
       if (!advice) {
         advice = [];
@@ -1011,7 +1138,18 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           this.pending.delete(oldest);
         }
       }
-      advice.push({ street, action: a.action, amount: a.amount });
+      const vs = ctx ? mainOpponent(ctx) : null;
+      advice.push({
+        street,
+        action: a.action,
+        amount: a.amount,
+        equity: Math.round(a.equity * 100),
+        ...a.potOdds !== null ? { needed: Math.round(a.potOdds * 100) } : {},
+        ...ctx ? { pot: Math.round(ctx.pot), toCall: Math.round(ctx.toCall) } : {},
+        position: a.position,
+        ...a.effectiveStackBB !== void 0 ? { stackBB: Math.round(a.effectiveStackBB * 10) / 10 } : {},
+        ...vs ? { vs } : {}
+      });
     }
     /** the stored hand, or null when nothing was stored (hero not dealt in, no result, or a repeat) */
     recordHand(hand) {
@@ -1020,7 +1158,15 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       if (!hand.dealtIn.some((p) => p.userID === hand.heroId)) return null;
       if (Object.keys(hand.winnings).length === 0) return null;
       if (this.hands.some((h) => h.handId === hand.handId)) return null;
-      const advice = pending ?? [];
+      const heroActions = hand.actions.filter((a) => a.userID === hand.heroId);
+      const nth = /* @__PURE__ */ new Map();
+      const advice = (pending ?? []).map((a) => {
+        const i = nth.get(a.street) ?? 0;
+        nth.set(a.street, i + 1);
+        const t = heroActions.filter((x) => x.street === a.street)[i];
+        return t && family(t.action) === "aggressive" && t.handBetAfter > 0 ? { ...a, handTotalAfter: Math.round(t.handBetAfter) } : a;
+      });
+      const seat = hand.dealtIn.find((p) => p.userID === hand.heroId).seat;
       const taken = hand.actions.filter((a) => a.userID === hand.heroId).map((a) => ({ street: a.street, action: a.action }));
       const seen = /* @__PURE__ */ new Map();
       const followed = advice.length === 0 ? null : advice.every((a) => {
@@ -1035,6 +1181,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         handId: hand.handId,
         tableId: hand.tableId,
         ...hand.bigBlind > 0 ? { bigBlind: hand.bigBlind } : {},
+        position: positionOf(hand.dealtIn.map((p) => p.seat).sort((x, y) => x - y), hand.dealerSeat, seat),
         at: hand.endedAt,
         cards: hand.heroCards,
         ...hand.board.length > 0 ? { board: [...hand.board] } : {},
@@ -1113,6 +1260,24 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   var TO = { fold: "fold", check: "check", call: "call", bet: "bet", raise: "raise", allin: "go all in" };
   var NOUN = { fold: "a fold", check: "a check", call: "a call", bet: "a bet", raise: "a raise", allin: "an all-in" };
   var streetName = (s) => STREET_NAME[s];
+  function judge(a, did, net) {
+    if (!a || !did) return null;
+    const gap = shortfall(a);
+    if (gap === null) return null;
+    const mine = `${a.equity}%`;
+    const need = `${a.needed}%`;
+    if (did === "call" && gap >= CLEAR_GAP) {
+      const tail = net > 0 ? ", even though it won this time" : "";
+      return { text: `You called needing ${need} with about ${mine}. A call that loses over time${tail}.`, tone: "bad" };
+    }
+    if (did === "call" && gap > 0) {
+      return { text: `A close call: you needed ${need} and had about ${mine}. The estimate is rough, so this could go either way.`, tone: "warn" };
+    }
+    if (did === "fold" && gap <= -CLEAR_GAP) {
+      return { text: `Folding gave up a spot where you had about ${mine} and needed ${need}.`, tone: "warn" };
+    }
+    return null;
+  }
   var dollars = (n) => `$${Math.abs(n).toLocaleString("en-US")}`;
   function adviceText(action, amount, bigBlind) {
     if (amount === null) return ADVISED[action];
@@ -1147,6 +1312,13 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     }
     return `${lead} \u2014 ${result}.`;
   }
+  function numbersText(a) {
+    if (a.equity === void 0) return null;
+    const parts = [`Win chance ${a.equity}%`];
+    if (a.needed !== void 0) parts.push(`needed ${a.needed}%`);
+    if (a.vs) parts.push(`against ${a.vs.name}`);
+    return parts.join(" \xB7 ");
+  }
   function buildReview(hand) {
     const board = hand.board ?? [];
     const bb = hand.bigBlind;
@@ -1163,7 +1335,9 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           board: board.slice(0, BOARD_LEN[street]),
           advised: a ? { action: a.action, amount: a.amount, text: adviceText(a.action, a.amount, bb) } : null,
           did: t ? { action: t.action, text: DID[t.action] } : null,
-          matched: a && t ? family(a.action) === family(t.action) : null
+          matched: a && t ? family(a.action) === family(t.action) : null,
+          numbers: a ? numbersText(a) : null,
+          judgement: judge(a, t?.action, hand.net)
         });
       }
     }
@@ -1202,6 +1376,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
 #tp-advisor .tp-review-line{display:flex;gap:8px;align-items:baseline}
 #tp-advisor .tp-review-label{flex:0 0 52px;font-size:11px;color:${THEME.muted}}
 #tp-advisor .tp-review-match{margin-left:auto;font-size:11px;font-weight:700;white-space:nowrap}
+#tp-advisor .tp-review-judge{margin-top:2px;font-size:12px}
 #tp-advisor .tp-review-take{margin:8px 0 0;font-size:12px}
 #tp-advisor .tp-review-none{margin:6px 0 0;font-size:12px;color:${THEME.muted}}
 `;
@@ -1253,7 +1428,18 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           m.style.color = row.matched ? THEME.good : THEME.warning;
           did.append(m);
         }
-        li.append(street, advice, did);
+        li.append(street, advice);
+        if (row.numbers) {
+          const nums = make(doc, "div", "tp-review-line");
+          nums.append(make(doc, "span", "tp-review-label", "Odds"), make(doc, "span", void 0, row.numbers));
+          li.append(nums);
+        }
+        li.append(did);
+        if (row.judgement) {
+          const j = make(doc, "div", "tp-review-judge", row.judgement.text);
+          j.style.color = row.judgement.tone === "bad" ? THEME.bad : row.judgement.tone === "warn" ? THEME.warning : THEME.good;
+          li.append(j);
+        }
         list2.append(li);
       }
       card.append(list2);
@@ -1266,6 +1452,122 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     }
     if (r.takeaway) card.append(make(doc, "p", "tp-review-take", r.takeaway));
     return card;
+  }
+
+  // src/advice/depth.ts
+  var TIERS = [
+    { name: "short", maxBB: 15, bluffShare: Infinity, label: "short stack" },
+    { name: "medium", maxBB: 40, bluffShare: 0.33, label: "medium stack" },
+    { name: "deep", maxBB: Infinity, bluffShare: Infinity, label: "deep stack" }
+  ];
+  var SPR_BANDS = [
+    { maxSpr: 3, valueShift: -0.08, commit: true },
+    { maxSpr: 13, valueShift: 0, commit: false },
+    { maxSpr: Infinity, valueShift: 0.04, commit: false }
+  ];
+  function sprBand(spr) {
+    return SPR_BANDS.find((b) => spr !== null && spr <= b.maxSpr) ?? SPR_BANDS[1];
+  }
+  function depthOf(ctx) {
+    const deepest = Math.max(0, ...ctx.villains.map((v) => v.stack));
+    const chips = deepest > 0 ? Math.min(ctx.heroStack, deepest) : ctx.heroStack;
+    const stackBB = ctx.bigBlind > 0 ? chips / ctx.bigBlind : Infinity;
+    const tier = TIERS.find((t) => stackBB <= t.maxBB).name;
+    const spr = ctx.board.length > 0 && ctx.pot > 0 ? chips / ctx.pot : null;
+    return { stackBB, tier, spr };
+  }
+  var tierOf = (d) => TIERS.find((t) => t.name === d.tier);
+  var bbText = (bb) => `${Number(bb.toFixed(1))} BB`;
+
+  // src/ui/range-read.ts
+  var RANGE_READ_RULES = [
+    ".tp-rr{margin:6px 0 2px;font-size:12px;line-height:1.4;color:#ddd;font-variant-numeric:tabular-nums}",
+    ".tp-rr p{margin:0 0 3px;overflow-wrap:break-word}",
+    ".tp-rr-hands{font-weight:bold}",
+    ".tp-rr-item{white-space:nowrap}",
+    ".tp-rr-note{color:#aaa}"
+  ];
+  var BASIS = "based on how they\u2019ve played";
+  function list(names) {
+    return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+  }
+  function handsText(h) {
+    return h.kind === "likely" ? `Likely ${h.names[0]} (${h.pct}%)` : `Most likely: ${list(h.names)} (${h.pct}%)`;
+  }
+  function rangeReadView(doc, read, opts = {}) {
+    const { name, explainSpread = false } = opts;
+    const wrap = doc.createElement("div");
+    wrap.className = "tp-rr";
+    const line = (cls, text) => {
+      const p = doc.createElement("p");
+      p.className = cls;
+      p.textContent = text;
+      return p;
+    };
+    if (read.hands) {
+      const text = handsText(read.hands);
+      wrap.append(line("tp-rr-hands", `${name ? `${name}: ${text[0].toLowerCase()}${text.slice(1)}` : text}, ${BASIS}`));
+    } else if (explainSpread) {
+      wrap.append(line("tp-rr-note", "Too spread out to name a likely hand."));
+    }
+    const shown = read.buckets?.filter((b) => b.pct > 0);
+    if (shown?.length) {
+      const p = doc.createElement("p");
+      p.className = "tp-rr-buckets";
+      p.append(`${name ? `${name} probably has` : "On this board they probably have"}: `);
+      shown.forEach((b, i) => {
+        const item = doc.createElement("span");
+        item.className = "tp-rr-item";
+        item.dataset.bucket = b.key;
+        item.textContent = `${b.label} ${b.pct}%`;
+        if (i > 0) p.append(" \xB7 ");
+        p.append(item);
+      });
+      wrap.append(p);
+      wrap.append(line("tp-rr-note", `An estimate ${BASIS}, not a certainty.`));
+    }
+    return wrap;
+  }
+
+  // src/ui/stakes.ts
+  var pctText = (p) => `${p < 10 ? Number(p.toFixed(1)) : Math.round(p)}%`;
+  function stakeText(a) {
+    const s = a.stakes;
+    if (!s || a.action === "check") return null;
+    const risk = s.share >= 1 ? `your whole stack (${bbText(s.bb)})` : `${Math.round(s.share * 100)}% of your stack (${bbText(s.bb)})`;
+    if (a.action !== "fold") return { tone: "note", lead: "At stake:", text: `this call is ${risk}.` };
+    const parts = [`calling risks ${risk}.`];
+    if (s.range) parts.push(`Their ${s.range.kind === "re-raise" ? "re-raises" : "raises"} are about ${pctText(s.range.pct)} of hands.`);
+    const hands = a.bettorRead?.read.hands;
+    if (hands) parts.push(`${handsText(hands)}.`);
+    return { tone: "warn", lead: "Big decision:", text: parts.join(" ") };
+  }
+  var STAKE_RULES = [
+    `.tp-stakes{margin:6px 0 4px;font-size:13px;line-height:1.4;color:${THEME.text};overflow-wrap:break-word}`,
+    ".tp-stakes b{font-weight:700}",
+    `.tp-stakes-warn{padding:5px 8px;border-left:4px solid ${THEME.bad};background:rgba(224,80,80,.16);border-radius:0 4px 4px 0}`,
+    ".tp-stakes-warn b{color:#ff8a8a}"
+  ];
+  function stakeView(doc, t, announce) {
+    const line = doc.createElement("div");
+    line.className = t.tone === "warn" ? "tp-stakes tp-stakes-warn" : "tp-stakes";
+    const lead = doc.createElement("b");
+    lead.textContent = t.lead;
+    line.append(lead, ` ${t.text}`);
+    if (announce) {
+      line.setAttribute("role", "status");
+      line.setAttribute("aria-live", "polite");
+    }
+    return line;
+  }
+  function warningAnnouncer() {
+    let last = null;
+    return (t) => {
+      const key = t?.tone === "warn" ? t.text : null;
+      const fresh = key !== null && key !== last;
+      last = key;
+      return fresh;
+    };
   }
 
   // src/ui/panel.ts
@@ -1369,7 +1671,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     };
     const style = el2("style");
     style.id = "tp-advisor-style";
-    style.textContent = `${PANEL_CSS}${REVIEW_CSS}.${CARDS_HIDDEN} #tp-cards{display:none!important}
+    style.textContent = `${PANEL_CSS}${REVIEW_CSS}${STAKE_RULES.map((r) => `#tp-advisor ${r}`).join("\n")}
+.${CARDS_HIDDEN} #tp-cards{display:none!important}
 `;
     const root = el2("div");
     root.id = "tp-advisor";
@@ -1589,10 +1892,12 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           box.append(el2("div", void 0, STATUS_TEXT[s]));
           if (detail) box.append(el2("div", "tp-muted", detail));
         });
+        announceWarning(null);
       } catch (e) {
         warn("setStatus failed", e);
       }
     }
+    const announceWarning = warningAnnouncer();
     function showAdvice(a, opts) {
       try {
         render(adviceBox, (box) => {
@@ -1604,6 +1909,9 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           const big = el2("div", opts?.preview ? "tp-big tp-big-preview" : "tp-big", actionLine(a));
           big.style.color = actionColor(a.action);
           box.append(big);
+          const stake = opts?.preview ? null : stakeText(a);
+          const fresh = announceWarning(stake);
+          if (stake) box.append(stakeView(doc, stake, fresh && !opts?.quiet));
           if (opts?.bet && !opts.preview) box.append(buildBetSlider(doc, a, opts.bet));
           box.append(buildMeters(doc, a));
           if (!a.strength) box.append(kv("Hand", a.hand));
@@ -1722,6 +2030,14 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           report.calledFold.hands
         )
       );
+      if (report.calledFold.spots > 0) {
+        sec.append(line(
+          report.calledFoldBad.spots,
+          (n) => `${n} of those ${report.calledFoldBad.spots === 1 ? "was a clearly bad call" : "were clearly bad calls"}: your win chance was at least 8 points under what the call needed.`,
+          "None of those calls were clearly bad, or older hands have no numbers to judge by.",
+          report.calledFoldBad.hands
+        ));
+      }
       if (report.followed.hands > 0) {
         const p = el2("div", "tp-leak-line");
         p.append(`Hands where you followed the advice: `);
@@ -2025,6 +2341,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       if (confirm("Reset all opponent profiles?")) h.onResetProfiles();
     });
     resetBtn.classList.add("tp-danger");
+    const normsBox = el2("div");
     bodies.settings.append(
       section(
         "Display",
@@ -2034,6 +2351,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         limitInput("winTarget", "Win target, up by", "Win target")
       ),
       posSection,
+      section("Your tables", normsBox),
       section(
         "Your data",
         el2("div", "tp-hint", "Back up or move your player profiles and results."),
@@ -2049,6 +2367,18 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         recCount.textContent = `${frames.toLocaleString("en-US")} frames`;
       } catch (e) {
         warn("setRecording failed", e);
+      }
+    }
+    function showNorms(n) {
+      try {
+        const { lead, items } = normsText(n);
+        const list2 = el2("ul", "tp-norms");
+        for (const item of items) list2.append(el2("li", void 0, item));
+        const leadEl = el2("div", "tp-hint", lead);
+        leadEl.style.color = THEME.subtle;
+        normsBox.replaceChildren(leadEl, ...items.length > 0 ? [list2] : []);
+      } catch (e) {
+        warn("showNorms failed", e);
       }
     }
     function notice(text) {
@@ -2106,7 +2436,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     doc.head.appendChild(style);
     doc.body.appendChild(root);
     clamp();
-    return { setStatus, showAdvice, showResults, showReview, setRecording, notice, reminder, dockInto, toggleVisible, isVisible: () => !ui.hidden };
+    return { setStatus, showAdvice, showResults, showReview, setRecording, showNorms, notice, reminder, dockInto, toggleVisible, isVisible: () => !ui.hidden };
   }
 
   // src/profiles/labels.ts
@@ -2576,8 +2906,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     }
     return new Map([...sum2].map(([c, s]) => [c, s / count.get(c)]));
   }
-  function generalRange(s) {
-    return topPercent(blendedRates(s ?? freshStats(0, "")).vpip);
+  function generalRange(s, prior = DEFAULT_PRIOR) {
+    return topPercent(blendedRates(s ?? freshStats(0, ""), prior).vpip);
   }
   var RANGE_GRID_RULES = [
     ".tp-rg{margin:8px 0 4px}",
@@ -2626,56 +2956,6 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     sum2.className = "tp-rg-sum";
     sum2.textContent = `${summary}. Pairs run down the middle, suited hands sit above and offsuit hands below.`;
     wrap.append(cap, grid, sum2);
-    return wrap;
-  }
-
-  // src/ui/range-read.ts
-  var RANGE_READ_RULES = [
-    ".tp-rr{margin:6px 0 2px;font-size:12px;line-height:1.4;color:#ddd;font-variant-numeric:tabular-nums}",
-    ".tp-rr p{margin:0 0 3px;overflow-wrap:break-word}",
-    ".tp-rr-hands{font-weight:bold}",
-    ".tp-rr-item{white-space:nowrap}",
-    ".tp-rr-note{color:#aaa}"
-  ];
-  var BASIS = "based on how they\u2019ve played";
-  function list(names) {
-    return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
-  }
-  function handsText(h) {
-    return h.kind === "likely" ? `Likely ${h.names[0]} (${h.pct}%)` : `Most likely: ${list(h.names)} (${h.pct}%)`;
-  }
-  function rangeReadView(doc, read, opts = {}) {
-    const { name, explainSpread = false } = opts;
-    const wrap = doc.createElement("div");
-    wrap.className = "tp-rr";
-    const line = (cls, text) => {
-      const p = doc.createElement("p");
-      p.className = cls;
-      p.textContent = text;
-      return p;
-    };
-    if (read.hands) {
-      const text = handsText(read.hands);
-      wrap.append(line("tp-rr-hands", `${name ? `${name}: ${text[0].toLowerCase()}${text.slice(1)}` : text}, ${BASIS}`));
-    } else if (explainSpread) {
-      wrap.append(line("tp-rr-note", "Too spread out to name a likely hand."));
-    }
-    const shown = read.buckets?.filter((b) => b.pct > 0);
-    if (shown?.length) {
-      const p = doc.createElement("p");
-      p.className = "tp-rr-buckets";
-      p.append(`${name ? `${name} probably has` : "On this board they probably have"}: `);
-      shown.forEach((b, i) => {
-        const item = doc.createElement("span");
-        item.className = "tp-rr-item";
-        item.dataset.bucket = b.key;
-        item.textContent = `${b.label} ${b.pct}%`;
-        if (i > 0) p.append(" \xB7 ");
-        p.append(item);
-      });
-      wrap.append(p);
-      wrap.append(line("tp-rr-note", `An estimate ${BASIS}, not a certainty.`));
-    }
     return wrap;
   }
 
@@ -2785,8 +3065,9 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       return e;
     };
     const s = p.stats;
-    const r = s && s.hands > 0 ? blendedRates(s) : null;
-    const style = s ? readStyle(s) : "Unknown";
+    const r = s && s.hands > 0 ? blendedRates(s, p.prior) : null;
+    const fresh = (s?.hands ?? 0) < TAG_MIN_HANDS;
+    const style = s && !fresh ? readStyle(s, p.prior) : "Unknown";
     const hands = s?.hands ?? 0;
     const early = !s || isEarlyRead(s);
     const badge = el2("span", "tp-badge", style);
@@ -2845,7 +3126,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       about,
       stats,
       helpList(doc, "What these numbers mean", helps),
-      rangeGrid(doc, p.liveRange ?? generalRange(s), p.liveRange !== void 0)
+      rangeGrid(doc, p.liveRange ?? generalRange(s, p.prior), p.liveRange !== void 0)
     );
     if (p.liveRange !== void 0 && p.liveRead) pop.append(rangeReadView(doc, p.liveRead, { explainSpread: true }));
     pop.append(tip, labelPicker(doc, p), noteBox(doc, p));
@@ -2866,7 +3147,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       tag2.append(chip);
     }
     const note = s?.note ? ` Note: ${s.note}` : "";
-    if (r) {
+    if (r && !fresh) {
       const plays = `plays ${Math.round(r.vpip)}%`;
       tag2.append(el2("span", "tp-tag-style", STYLES[style].short), sep(), el2("span", "tp-tag-rates", plays));
       if (early) tag2.append(sep(), el2("span", "tp-tag-hands", "early read"));
@@ -2874,7 +3155,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       tag2.setAttribute("aria-label", tag2.title.replace(" Click for profile.", " Opens the profile."));
     } else {
       tag2.append(el2("span", "tp-tag-style", "New player"));
-      tag2.title = `${p.name}: no hands seen yet.${note} Click for profile.`;
+      tag2.title = `${p.name}: ${hands === 0 ? "no hands seen yet" : `only ${hands} ${hands === 1 ? "hand" : "hands"} seen, too few for a read`}.${note} Click for profile.`;
       tag2.setAttribute("aria-label", tag2.title.replace(" Click for profile.", " Opens the profile."));
     }
     tag2.classList.toggle("tp-low", early);
@@ -3040,6 +3321,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   }
   var POP_MARGIN = 8;
   var MIN_POP_ROOM = 160;
+  var TAG_MIN_HANDS = 5;
   var BOX_SELECTOR = '[class*="additionalBox"], [class*="detailsBox"]';
   function anchorRect(seat) {
     let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
@@ -3252,6 +3534,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
 #${ROW_ID} .tp-hud-label{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#aaa;margin-right:6px}
 #${ROW_ID} .tp-hud-meta{color:#aaa;font-size:12px;margin-left:6px}
 ${RANGE_READ_RULES.map((r) => `#${ROW_ID} ${r}`).join("\n")}
+${STAKE_RULES.map((r) => `#${ROW_ID} ${r}`).join("\n")}
 /* Slider styled like Torn's own controls: one row, recessed track, grey fader knob, inset readout */
 /* Torn's own bet box shows the amount, so only the label and track show here */
 #${ROW_ID} .tp-bet{display:grid;grid-template-columns:auto 1fr;grid-template-areas:"title track";align-items:center;column-gap:10px;margin:6px 0 2px;padding:0;border:0;background:none}
@@ -3311,10 +3594,12 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     row.id = ROW_ID;
     row.style.display = "none";
     const q = (sel, root = doc) => root.querySelector(sel);
+    const announceWarning = warningAnnouncer();
     function renderRow() {
       row.replaceChildren();
       row.classList.toggle("tp-preview", !!shown?.preview);
       if (!shown) {
+        announceWarning(null);
         row.style.display = "none";
         return;
       }
@@ -3329,7 +3614,11 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       act.textContent = actionLine(a);
       act.style.color = actionColor(a.action);
       line.append(label, act);
-      row.append(line, buildMeters(doc, a));
+      row.append(line);
+      const stake = preview ? null : stakeText(a);
+      const fresh = announceWarning(stake);
+      if (stake) row.append(stakeView(doc, stake, fresh));
+      row.append(buildMeters(doc, a));
       if (a.bettorRead && !preview) row.append(rangeReadView(doc, a.bettorRead.read, { name: a.bettorRead.name }));
       if (bet && !preview) {
         row.append(buildBetSlider(doc, a, bet, { chips: false }));
@@ -3503,7 +3792,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       },
       showAdvice(a, opts) {
         const inHud = hud.available();
-        panel.showAdvice(a, inHud ? { preview: opts?.preview } : opts);
+        panel.showAdvice(a, inHud ? { preview: opts?.preview, quiet: true } : opts);
         hud.showAdvice(a, opts);
       }
     };
@@ -3770,41 +4059,6 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     }
   }
 
-  // src/advice/position.ts
-  var OPEN_PCT = {
-    UTG: 12,
-    "UTG+1": 14,
-    MP: 17,
-    LJ: 20,
-    HJ: 25,
-    CO: 30,
-    BTN: 45,
-    SB: 40,
-    BB: 0
-  };
-  var FROM_BUTTON = ["BTN", "CO", "HJ", "LJ", "MP", "UTG+1", "UTG"];
-  function dealerIndex(seats, dealerSeat) {
-    let idx = -1;
-    for (let i = 0; i < seats.length; i++) if (seats[i] <= dealerSeat) idx = i;
-    return idx >= 0 ? idx : seats.length - 1;
-  }
-  function orderAfterDealer(seats, dealerSeat, seat) {
-    const i = seats.indexOf(seat);
-    if (i < 0) return -1;
-    const n = seats.length;
-    return (i - dealerIndex(seats, dealerSeat) - 1 + n) % n;
-  }
-  function positionOf(dealtInSeats, dealerSeat, seat) {
-    const n = dealtInSeats.length;
-    const order = orderAfterDealer(dealtInSeats, dealerSeat, seat);
-    if (order < 0) throw new Error("Seat not dealt in");
-    if (n <= 2) return order === n - 1 ? "BTN" : "BB";
-    if (order === 0) return "SB";
-    if (order === 1) return "BB";
-    const names = n === 3 ? ["BTN"] : ["UTG", ...FROM_BUTTON.slice(0, n - 3).reverse()];
-    return names[order - 2];
-  }
-
   // src/advice/context.ts
   function priceOf(s, toCall, heroMoney) {
     const heroIn = s.invested[s.heroId];
@@ -3823,13 +4077,14 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     const legal = projectedLegal(s);
     return legal ? contextFor(s, profiles, legal) : null;
   }
-  function villainRates(prof) {
-    const r = blendedRates(prof);
+  function villainRates(prof, norms) {
+    const r = blendedRates(prof, norms.prior);
+    const flop = (key) => (prof[key]?.d ?? 0) >= MIN_CBET_OPPS || isLearned(norms, key) ? r[key] : null;
     return {
       ...r,
       foldToRaise: prof.hands >= MIN_HANDS_FOR_STYLE ? r.foldToRaise : null,
-      cbet: (prof.cbet?.d ?? 0) >= MIN_CBET_OPPS ? r.cbet : null,
-      foldToCbet: (prof.foldToCbet?.d ?? 0) >= MIN_CBET_OPPS ? r.foldToCbet : null
+      cbet: flop("cbet"),
+      foldToCbet: flop("foldToCbet")
     };
   }
   function contextFor(s, profiles, legal) {
@@ -3840,6 +4095,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     const dealtSeats = s.dealtIn.map((d) => d.seat).sort((a, b) => a - b);
     const position = positionOf(dealtSeats, s.dealerSeat, heroDealt.seat);
     const foldedIds = new Set(s.actions.filter((a) => a.action === "fold").map((a) => a.userID));
+    const norms = profiles.norms();
     const villains = [];
     for (const d of s.dealtIn) {
       if (d.userID === s.heroId || foldedIds.has(d.userID)) continue;
@@ -3853,8 +4109,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         seat: d.seat,
         position: positionOf(dealtSeats, s.dealerSeat, d.seat),
         stack: seat?.money ?? 0,
-        style: known ? readStyle(prof) : "Unknown",
-        rates: known ? villainRates(prof) : NO_RATES,
+        style: known ? readStyle(prof, norms.prior) : "Unknown",
+        rates: known ? villainRates(prof, norms) : NO_RATES,
         hands: prof?.hands ?? 0,
         ...prof?.betSizes ? { betSizes: prof.betSizes } : {},
         actions: s.actions.filter((a) => a.userID === d.userID)
@@ -4070,31 +4326,6 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     const name = parts.join(" and ");
     return { name: name[0].toUpperCase() + name.slice(1), outs, hitChance: hitChance(outs, board.length) };
   }
-
-  // src/advice/depth.ts
-  var TIERS = [
-    { name: "short", maxBB: 15, bluffShare: Infinity, label: "short stack" },
-    { name: "medium", maxBB: 40, bluffShare: 0.33, label: "medium stack" },
-    { name: "deep", maxBB: Infinity, bluffShare: Infinity, label: "deep stack" }
-  ];
-  var SPR_BANDS = [
-    { maxSpr: 3, valueShift: -0.08, commit: true },
-    { maxSpr: 13, valueShift: 0, commit: false },
-    { maxSpr: Infinity, valueShift: 0.04, commit: false }
-  ];
-  function sprBand(spr) {
-    return SPR_BANDS.find((b) => spr !== null && spr <= b.maxSpr) ?? SPR_BANDS[1];
-  }
-  function depthOf(ctx) {
-    const deepest = Math.max(0, ...ctx.villains.map((v) => v.stack));
-    const chips = deepest > 0 ? Math.min(ctx.heroStack, deepest) : ctx.heroStack;
-    const stackBB = ctx.bigBlind > 0 ? chips / ctx.bigBlind : Infinity;
-    const tier = TIERS.find((t) => stackBB <= t.maxBB).name;
-    const spr = ctx.board.length > 0 && ctx.pot > 0 ? chips / ctx.pot : null;
-    return { stackBB, tier, spr };
-  }
-  var tierOf = (d) => TIERS.find((t) => t.name === d.tier);
-  var bbText = (bb) => `${Number(bb.toFixed(1))} BB`;
 
   // src/advice/villain-range.ts
   var PARAMS = {
@@ -4859,6 +5090,21 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return { buckets, hands: nameHands(byName, total2) };
   }
 
+  // src/advice/stakes.ts
+  var BIG_CALL = { stackShare: 0.2, bigBlinds: 20 };
+  function stakesOf(ctx) {
+    const bettor = ctx.lastAggressor;
+    if (!bettor || ctx.toCall <= 0 || ctx.heroStack <= 0) return null;
+    const preflop = ctx.street === "preflop";
+    if (preflop && ctx.preflopRaises < 1) return null;
+    const share = Math.min(1, ctx.toCall / ctx.heroStack);
+    const bb = ctx.toCall / ctx.bigBlind;
+    if (share < BIG_CALL.stackShare && bb < BIG_CALL.bigBlinds) return null;
+    const kind = ctx.preflopRaises >= 2 ? "re-raise" : "raise";
+    const pct5 = kind === "re-raise" ? bettor.rates.threeBet : bettor.rates.pfr;
+    return { share, bb, range: preflop && pct5 !== null ? { kind, pct: pct5 } : null };
+  }
+
   // src/advice/advise.ts
   async function advise(ctx, opts = {}) {
     const preflop = ctx.street === "preflop";
@@ -4885,12 +5131,14 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       return `${v.name} (${v.style}): ~${Math.round(rangePercent(ranges[i]))}% of hands, ${Math.round(combos)} combos`;
     });
     const header = fellBack ? ["Ranges unreadable \u2014 equity vs random hands"] : [];
+    const stakes = stakesOf(ctx);
     return legalize({
       ...decided,
       detail: [...header, ...rangeLines, ...decided.detail],
       strength: handStrength(ctx.heroCards, ctx.board),
       opponents: ctx.villains.length,
-      ...bettor && bettorRead ? { bettorRead: { name: bettor.name, read: bettorRead } } : {}
+      ...bettor && bettorRead ? { bettorRead: { name: bettor.name, read: bettorRead } } : {},
+      ...stakes ? { stakes } : {}
     }, ctx);
   }
 
@@ -4986,8 +5234,10 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return o.profiles.filter(isStats).map(cleaned);
   }
   var ProfileStore = class {
-    constructor(store2) {
+    /** heroId: the user, left out of the table norms */
+    constructor(store2, heroId = -1) {
       this.store = store2;
+      this.heroId = heroId;
       let stored;
       try {
         stored = store2.get(KEY2);
@@ -4998,13 +5248,20 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       this.prune();
     }
     store;
+    heroId;
     profiles = /* @__PURE__ */ new Map();
     timer = null;
+    /** learned lazily and kept until a hand, import or reset changes the counters */
+    learned = null;
     get(userID) {
       return this.profiles.get(userID);
     }
     all() {
       return [...this.profiles.values()];
+    }
+    /** How opponents at the user's tables play, pooled from every stored profile but the hero's. */
+    norms() {
+      return this.learned ??= learnNorms(this.profiles.values(), this.heroId);
     }
     record(hand) {
       for (const p of hand.dealtIn) {
@@ -5017,6 +5274,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         this.profiles.set(p.userID, next);
       }
       this.prune();
+      this.learned = null;
       if (this.timer === null) this.timer = setTimeout(() => this.flush(), SAVE_DELAY_MS2);
     }
     setNote(userID, name, text) {
@@ -5042,6 +5300,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     reset(userID) {
       const old = this.profiles.get(userID);
       this.profiles.delete(userID);
+      this.learned = null;
       if (old && (old.note || old.label)) {
         const kept = freshStats(userID, old.name);
         this.profiles.set(userID, { ...kept, ...old.note ? { note: old.note } : {}, ...old.label ? { label: old.label } : {} });
@@ -5050,6 +5309,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     }
     resetAll() {
       this.profiles.clear();
+      this.learned = null;
       this.flush();
     }
     flush() {
@@ -5074,6 +5334,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       if (!incoming) throw new Error("Not a profile export");
       for (const p of incoming) this.profiles.set(p.userID, p);
       this.prune();
+      this.learned = null;
       this.flush();
       return incoming.length;
     }
@@ -5423,7 +5684,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   }
   function createApp(deps) {
     const { store: store2, panel } = deps;
-    const profiles = new ProfileStore(store2);
+    const profiles = new ProfileStore(store2, deps.heroId);
     const results = new Results(store2);
     const capture = new CaptureLog(store2);
     let state = initialState(deps.heroId);
@@ -5445,13 +5706,17 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       status = s;
       panel.setStatus(s);
     };
-    const showResults = () => panel.showResults(results.summary(deps.now()), profiles.get(state.heroId));
+    const showResults = () => {
+      panel.showResults(results.summary(deps.now()), profiles.get(state.heroId));
+      panel.showNorms?.(profiles.norms());
+    };
     const renderCards = () => {
       deps.renderCards(
         state.seats.filter((q) => q.userID !== state.heroId).map((q) => ({
           userID: q.userID,
           name: q.name,
           stats: profiles.get(q.userID),
+          prior: profiles.norms().prior,
           liveRange: liveRanges?.handId === state.handId ? liveRanges.ranges.get(q.userID) : void 0,
           liveRead: liveRanges?.handId === state.handId ? liveRanges.reads.get(q.userID) : void 0,
           onNote: guard2("save note", (text) => {
@@ -5538,7 +5803,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           }
           if (preview) return;
           try {
-            results.recordAdvice(handId, street, advice);
+            results.recordAdvice(handId, street, advice, ctx);
           } catch (e) {
             warn4("record advice failed", e);
           }
