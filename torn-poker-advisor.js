@@ -148,7 +148,8 @@
       bbPer100: t.bb === null ? null : t.bb / t.hands * 100,
       durationMs,
       perHour,
-      biggestWin: hands.reduce((m, h) => h.net > 0 ? Math.max(m, h.won) : m, 0)
+      biggestWin: hands.reduce((m, h) => h.net > 0 ? Math.max(m, h.won) : m, 0),
+      biggestWinBb: t.bb === null ? null : hands.reduce((m, h) => h.net > 0 ? Math.max(m ?? 0, h.won / h.bigBlind) : m, null)
     };
   }
   function computeInsights(hands, now) {
@@ -379,6 +380,476 @@
     }
   }
 
+  // src/ui/glossary.ts
+  var STATS = {
+    vpip: {
+      label: "Hands played",
+      abbr: "VPIP",
+      help: "How often you put money in before the flop by choice (blinds don\u2019t count).",
+      good: [18, 28],
+      low: "Very tight: you can open up a little.",
+      high: "Playing too many hands."
+    },
+    pfr: {
+      label: "Raised before the flop",
+      abbr: "PFR",
+      help: "How often you raise before the flop.",
+      good: [14, 22],
+      low: "Raise more of the hands you play instead of calling.",
+      high: "Raising a lot: make sure the hands back it up."
+    },
+    threeBet: {
+      label: "Re-raised a raise",
+      abbr: "3-bet",
+      help: "When someone raised before you, how often you raised again.",
+      good: [5, 10],
+      low: "Re-raise your best hands rather than calling.",
+      high: "Re-raising a lot: good players will push back."
+    },
+    af: {
+      label: "Aggression",
+      abbr: "AF",
+      ratio: true,
+      help: "After the flop: bets and raises for every call. Below 1.5 is passive.",
+      good: [2, 4],
+      low: "Passive: bet and raise more, call less.",
+      high: "Very aggressive: pick your bluffs."
+    },
+    foldToRaise: {
+      label: "Folded when raised",
+      abbr: "Fold to raise",
+      help: "When someone raised you, how often you folded.",
+      good: [35, 60],
+      low: "Hard to push off a hand: fold more weak hands to raises.",
+      high: "Easy to push around: players can bluff you off hands."
+    },
+    cbet: {
+      label: "Bets flop after raising",
+      abbr: "Continuation bet",
+      help: "After you raised before the flop, how often you bet the flop when nobody bet before you.",
+      good: [50, 70],
+      low: "Giving up too often after raising: bet the flop more when checked to.",
+      high: "Betting the flop every time: check your weak hands sometimes."
+    },
+    foldToCbet: {
+      label: "Folds to follow-up bet",
+      abbr: "Fold to continuation bet",
+      help: "When the player who raised before the flop bets the flop, how often you fold.",
+      good: [35, 55],
+      low: "Hard to push off a hand: fold more weak hands to a flop bet.",
+      high: "Easy to bluff: players bet the flop knowing you will fold."
+    },
+    wtsd: {
+      label: "Went to showdown",
+      abbr: "WTSD",
+      help: "Of the hands where you saw the flop, how often you got to the end.",
+      good: [24, 33],
+      low: "Giving up often after the flop.",
+      high: "Calling down too much: fold more by the river."
+    }
+  };
+  function verdict(key, value) {
+    const g = STATS[key].good;
+    if (value === null || !g) return "unknown";
+    return value < g[0] ? "low" : value > g[1] ? "high" : "good";
+  }
+  function formatStat(key, value) {
+    if (value === null) return "\u2013";
+    return STATS[key].ratio ? value.toFixed(1) : `${Math.round(value)}%`;
+  }
+  function goodRange(key) {
+    const g = STATS[key].good;
+    if (!g) return "";
+    return STATS[key].ratio ? `${g[0]}\u2013${g[1]}` : `${g[0]}\u2013${g[1]}%`;
+  }
+  var STYLES = {
+    "Tight-Aggressive": { short: "Solid", about: "Plays few hands and bets them hard. The style that wins." },
+    Aggro: { short: "Aggro", about: "Plays lots of hands and raises often." },
+    Maniac: { short: "Maniac", about: "Bets and raises with almost anything." },
+    "Calling station": { short: "Caller", about: "Plays lots of hands and calls rather than raises." },
+    Rock: { short: "Rock", about: "Plays very few hands and rarely raises without a big one." },
+    Unknown: { short: "Learning", about: "Not enough hands seen to judge yet." }
+  };
+
+  // src/ui/theme.ts
+  var THEME = {
+    bg: "#1b1b1b",
+    text: "#eee",
+    muted: "#999",
+    good: "#5fd35f",
+    warning: "#f0a030",
+    bad: "#e05050",
+    draw: "#5aa9e6",
+    line: "#333",
+    /** greys on the dark panel: 6:1 or better */
+    subtle: "#aaa",
+    focus: "#fff",
+    /** reminders and tips on the dark panel */
+    note: "#f0c060",
+    link: "#5aa0e0",
+    zIndex: "2147483000"
+  };
+  var MIN_TARGET = 24;
+  var BADGE = {
+    Aggro: "#b03226",
+    Maniac: "#a04000",
+    "Calling station": "#8e44ad",
+    Rock: "#566061",
+    "Tight-Aggressive": "#1f6f9f",
+    Unknown: "#555555"
+  };
+  var STYLE_TEXT = {
+    Aggro: "#ef6a5c",
+    Maniac: "#f0963c",
+    "Calling station": "#c48be0",
+    Rock: "#a3b0b1",
+    "Tight-Aggressive": "#5aa9e6",
+    Unknown: "inherit"
+  };
+  var FOCUSABLE = ":is(button,input,textarea,select,summary,[tabindex])";
+  var FOCUS_CSS = `
+:is(#tp-advisor,#tp-cards,#tp-hud-row) ${FOCUSABLE}:focus-visible,#tp-hud-toggle button:focus-visible{outline:2px solid ${THEME.focus}!important;outline-offset:2px!important}
+`;
+  var SHARED_CSS = `
+:is(#tp-advisor,#tp-cards,#tp-hud-row) .tp-help{margin:6px 0}
+:is(#tp-advisor,#tp-cards,#tp-hud-row) .tp-help summary{cursor:pointer;min-height:${MIN_TARGET}px;display:flex;align-items:center;color:${THEME.subtle};font-size:12px}
+:is(#tp-advisor,#tp-cards,#tp-hud-row) .tp-help p{margin:3px 0 6px;font-size:12px;line-height:1.35;color:#ccc}
+:is(#tp-advisor,#tp-cards,#tp-hud-row) .tp-help p b{color:${THEME.text}}
+`;
+  var PANEL_WIDTH = 280;
+  var PANEL_CSS = `
+#tp-advisor{position:fixed;right:16px;top:120px;width:${PANEL_WIDTH}px;z-index:${THEME.zIndex};background:${THEME.bg};color:${THEME.text};font:13px/1.45 sans-serif;border:1px solid #333;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.55);box-sizing:border-box}
+#tp-advisor *{box-sizing:border-box}
+#tp-advisor{text-align:left;color-scheme:dark}
+#tp-advisor.tp-docked{position:relative;left:auto;top:auto;right:auto;width:100%;margin:0;z-index:auto;box-shadow:none;border:0;border-top:1px solid rgba(255,255,255,.08);border-radius:0;background:rgba(0,0,0,.45);font-size:12px}
+#tp-advisor.tp-docked .tp-head{cursor:default;padding:5px 10px;font:14px 'Fjalla One',sans-serif;letter-spacing:.4px;text-transform:uppercase;border-bottom-color:rgba(255,255,255,.08)}
+#tp-advisor.tp-docked .tp-grip{display:none}
+#tp-advisor.tp-docked .tp-tabs{border-bottom-color:rgba(255,255,255,.08)}
+#tp-advisor.tp-docked .tp-tab{padding:5px 0;font:13px 'Fjalla One',sans-serif;letter-spacing:.4px;text-transform:uppercase}
+#tp-advisor.tp-docked .tp-body{padding:8px 10px}
+#tp-advisor.tp-docked .tp-kv{border-bottom-color:rgba(255,255,255,.06)}
+/* the advice line above Torn's buttons already shows the action and equity */
+#tp-advisor.tp-docked .tp-big,#tp-advisor.tp-docked .tp-preview-label,#tp-advisor.tp-docked .tp-turn-label,#tp-advisor.tp-docked .tp-eq-line,#tp-advisor.tp-docked .tp-eq,#tp-advisor.tp-docked .tp-meters{display:none}
+#tp-advisor .tp-head{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 10px;cursor:move;user-select:none;border-bottom:1px solid ${THEME.line};font-weight:600}
+#tp-advisor .tp-title{flex:1;white-space:nowrap}
+#tp-advisor .tp-head-net{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+#tp-advisor .tp-min{background:none;border:0;color:${THEME.text};cursor:pointer;font:14px sans-serif;min-width:${MIN_TARGET}px;min-height:${MIN_TARGET}px;padding:0 6px;border-radius:4px}
+#tp-advisor .tp-min:hover,#tp-advisor .tp-alert-close:hover{background:rgba(255,255,255,.12)}
+#tp-advisor .tp-tabs{display:flex;border-bottom:1px solid ${THEME.line}}
+#tp-advisor .tp-tab{flex:1;background:none;border:0;color:${THEME.muted};cursor:pointer;padding:7px 0;font:13px sans-serif}
+#tp-advisor .tp-tab:hover{color:${THEME.text};background:rgba(255,255,255,.06)}
+#tp-advisor .tp-tab[aria-selected="true"]{color:${THEME.text};border-bottom:2px solid ${THEME.text}}
+#tp-advisor .tp-body{padding:10px}
+#tp-advisor .tp-big{font:800 22px sans-serif;margin:0 0 8px;padding:8px 10px;border-radius:6px;border-left:4px solid currentColor;background:rgba(255,255,255,.04);letter-spacing:.3px}
+#tp-advisor .tp-preview-label,#tp-advisor .tp-turn-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+#tp-advisor .tp-preview-label{color:${THEME.muted}}
+#tp-advisor .tp-turn-label{color:${THEME.warning};font-weight:700}
+#tp-advisor .tp-big-preview{opacity:.75;border-left-style:dashed;font-size:18px}
+:is(#tp-advisor,#tp-hud-row) .tp-bet{margin:0 0 10px;padding:8px 10px;border:1px solid #333;border-radius:6px;background:#202020}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-head{display:flex;justify-content:space-between;align-items:baseline}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-title{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:${THEME.muted}}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-value{font:800 18px sans-serif;font-variant-numeric:tabular-nums}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-sub{font-size:11px;color:${THEME.muted};text-align:right;margin-bottom:4px;font-variant-numeric:tabular-nums}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-track{position:relative;margin:4px 0 8px}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-range{width:100%;margin:0;accent-color:${THEME.good};cursor:pointer}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-tick{position:absolute;top:-4px;width:2px;height:6px;margin-left:-1px;background:${THEME.warning};pointer-events:none}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-quick{display:flex;flex-wrap:wrap}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-quick button.tp-btn{min-height:${MIN_TARGET}px;padding:4px 8px;margin:0 4px 4px 0;font-size:12px}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-quick button.tp-btn[aria-pressed="true"]{background:#4a4a4a!important;border-color:${THEME.focus}!important}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-quick button.tp-btn.tp-bet-advised{color:${THEME.warning}!important;border-color:rgba(240,160,48,.5)!important}
+:is(#tp-advisor,#tp-hud-row) .tp-bet-note{font-size:12px;color:${THEME.muted}}
+:is(#tp-advisor,#tp-hud-row) .tp-meters{display:grid;gap:4px;margin:6px 0}
+:is(#tp-advisor,#tp-hud-row) .tp-meter{display:grid;grid-template-columns:44px 80px minmax(0,1fr);align-items:center;gap:8px}
+:is(#tp-advisor,#tp-hud-row) .tp-meter-label{font:13px 'Fjalla One',sans-serif;letter-spacing:.4px;text-transform:uppercase;color:#aaa}
+:is(#tp-advisor,#tp-hud-row) .tp-meter-bar{position:relative;height:8px;border-radius:4px;background:#1a1a1a;border:1px solid #111;box-shadow:inset 0 1px 3px rgba(0,0,0,.9);overflow:visible}
+:is(#tp-advisor,#tp-hud-row) .tp-meter-fill{height:100%;border-radius:4px}
+:is(#tp-advisor,#tp-hud-row) .tp-meter-mark{position:absolute;top:-3px;width:2px;height:12px;margin-left:-1px;background:#fff;opacity:.7}
+:is(#tp-advisor,#tp-hud-row) .tp-meter-text{font-size:12px;color:#ddd;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+#tp-advisor .tp-eq{height:8px;background:${THEME.line};border-radius:3px;margin:3px 0 6px}
+#tp-advisor .tp-eq>div{height:100%;background:${THEME.good};border-radius:3px}
+#tp-advisor .tp-kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #252525}
+#tp-advisor .tp-kv>span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+#tp-advisor .tp-muted{color:${THEME.muted}}
+#tp-advisor .tp-chip{display:inline-block;margin-top:6px;padding:1px 8px;border-radius:9px;border:1px solid currentColor;font-size:12px}
+:is(#tp-advisor,#tp-hud-row) button.tp-btn{margin:0 6px 6px 0;padding:5px 10px;cursor:pointer;font:600 12px sans-serif;color:${THEME.text}!important;background:#2c2c2c!important;border:1px solid #4a4a4a!important;border-radius:5px;text-shadow:none;box-shadow:none;height:auto;line-height:1.2}
+:is(#tp-advisor,#tp-hud-row) button.tp-btn:hover{background:#383838!important;border-color:#666!important}
+:is(#tp-advisor,#tp-hud-row) button.tp-btn:active{background:#444!important;border-color:#888!important}
+:is(#tp-advisor,#tp-hud-row) button.tp-btn.tp-danger{color:${THEME.bad}!important;border-color:rgba(224,80,80,.5)!important}
+:is(#tp-advisor,#tp-hud-row) button.tp-btn.tp-danger:hover{background:rgba(224,80,80,.12)!important}
+#tp-advisor .tp-style-about{font-size:12px;margin:2px 0 8px}
+#tp-advisor .tp-stats{margin:4px 0 10px}
+#tp-advisor .tp-stat-row{padding:4px 0;border-bottom:1px solid #252525}
+#tp-advisor .tp-stat-row .tp-kv{border:0;padding:0}
+#tp-advisor .tp-abbr{color:${THEME.muted};font-size:11px}
+#tp-advisor .tp-stat-note{font-size:12px;color:${THEME.muted};line-height:1.3}
+#tp-advisor .tp-section{margin-bottom:12px}
+#tp-advisor .tp-section:last-child{margin-bottom:0}
+#tp-advisor .tp-section-title,#tp-advisor .tp-subhead,#tp-advisor .tp-heading{margin:0;font-family:inherit;line-height:inherit}
+#tp-advisor .tp-section-title{font-size:11px;font-weight:400;text-transform:uppercase;letter-spacing:.5px;color:${THEME.muted};margin-bottom:6px}
+#tp-advisor .tp-subhead{font-size:inherit;font-weight:400}
+#tp-advisor .tp-heading{font-size:inherit;font-weight:700}
+#tp-advisor .tp-you{display:block;width:100%;margin:8px 0 0;padding:2px 0;min-height:${MIN_TARGET}px;background:none;border:0;font:inherit;font-size:12px;text-align:left;cursor:pointer}
+#tp-advisor .tp-you:hover{color:${THEME.text}}
+#tp-advisor .tp-reminder{margin-top:6px;font-size:12px;color:${THEME.note}}
+#tp-advisor .tp-style-badge{padding:0 5px;margin-left:6px;border-radius:3px;font-size:11px;color:#fff}
+#tp-advisor .tp-field-error{margin:-2px 0 6px;font-size:12px;color:${THEME.bad}}
+#tp-advisor .tp-legend{font-size:12px;color:${THEME.muted};margin:2px 0 4px}
+#tp-advisor .tp-hint{font-size:12px;color:${THEME.muted};margin:-2px 0 6px}
+#tp-advisor label{display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px}
+#tp-advisor .tp-alert{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:7px 10px;font-size:12px;color:${THEME.warning};background:rgba(240,160,48,.1);border-bottom:1px solid rgba(240,160,48,.35)}
+#tp-advisor .tp-alert-close{background:none;border:0;color:inherit;cursor:pointer;font:16px/1 sans-serif;min-width:${MIN_TARGET}px;min-height:${MIN_TARGET}px;padding:0 4px;border-radius:4px}
+#tp-advisor .tp-leaks{margin:4px 0 8px}
+#tp-advisor .tp-leak-line{font-size:12px;margin-bottom:3px}
+#tp-advisor .tp-chart-wrap{margin:8px 0}
+#tp-advisor .tp-chart{display:block;width:100%;height:auto;margin-top:2px;background:rgba(255,255,255,.03);border-radius:4px}
+#tp-advisor .tp-past{margin:8px 0}
+#tp-advisor .tp-past-item{padding:3px 0;border-bottom:1px solid #252525}
+#tp-advisor .tp-past-item .tp-kv{border:0;padding:0}
+#tp-advisor .tp-past-item .tp-hint{margin:0}
+#tp-advisor ul{margin:4px 0 0;padding-left:16px}
+${SHARED_CSS}${FOCUS_CSS}`;
+
+  // src/ui/bet-slider.ts
+  function potSized(r, fraction) {
+    const top = r.streetBet + r.toCall;
+    return top + fraction * (r.pot + r.toCall);
+  }
+  var el = (doc, tag2, cls, text) => {
+    const e = doc.createElement(tag2);
+    if (cls) e.className = cls;
+    if (text !== void 0) e.textContent = text;
+    return e;
+  };
+  var guard = (what, fn) => (...args) => {
+    try {
+      fn(...args);
+    } catch (e) {
+      console.warn(`[torn-poker] ${what} failed`, e);
+    }
+  };
+  var SET_AMOUNT = "tp-set-amount";
+  var FILL_FAILED = "tp-fill-failed";
+  var MISSING_BOX = "Couldn\u2019t find Torn\u2019s bet box. Wait for your turn, then try again.";
+  function buildBetSlider(doc, a, r, opts = {}) {
+    const wrap = el(doc, "div", "tp-bet");
+    const bb = r.bigBlind > 0 ? r.bigBlind : 1;
+    const step = [bb / 4, bb / 2, bb].find((x) => Number.isInteger(x) && x >= 1) ?? 1;
+    const bound = (x) => Math.min(r.max, Math.max(r.min, x));
+    const snap = (x) => bound(Math.round(x / step) * step);
+    const advised = (a.action === "bet" || a.action === "raise" || a.action === "allin") && a.amount !== null ? bound(a.amount) : null;
+    const head = el(doc, "div", "tp-bet-head");
+    head.append(el(doc, "span", "tp-bet-title", r.kind === "raise" ? "Raise to" : "Bet"));
+    const readout = el(doc, "span", "tp-bet-value");
+    head.append(readout);
+    const sub = el(doc, "div", "tp-bet-sub");
+    const range = el(doc, "input");
+    range.type = "range";
+    range.className = "tp-bet-range";
+    range.min = String(r.min);
+    range.max = String(r.max);
+    range.step = "any";
+    range.setAttribute("aria-label", r.kind === "raise" ? "Raise to" : "Bet amount");
+    range.title = "Fills Torn\u2019s bet box. You press Torn\u2019s button.";
+    const track = el(doc, "div", "tp-bet-track");
+    track.append(range);
+    if (advised !== null && r.max > r.min) {
+      const tick = el(doc, "div", "tp-bet-tick");
+      tick.setAttribute("aria-hidden", "true");
+      tick.style.left = `${(advised - r.min) / (r.max - r.min) * 100}%`;
+      track.append(tick);
+    }
+    const chips = [];
+    const note = el(doc, "div", "tp-bet-note", "Fills Torn\u2019s bet box. You press Torn\u2019s button.");
+    note.setAttribute("aria-live", "polite");
+    const show = (amount) => {
+      const along = r.max > r.min ? (amount - r.min) / (r.max - r.min) * 100 : 100;
+      range.style.setProperty("--tp-fill", `${Math.min(100, Math.max(0, along))}%`);
+      readout.textContent = `${Number((amount / bb).toFixed(2))} BB`;
+      const potPct = r.pot > 0 ? Math.round((amount - r.streetBet - r.toCall) / (r.pot + r.toCall) * 100) : null;
+      sub.textContent = [
+        `$${Math.round(amount).toLocaleString("en-US")}`,
+        amount >= r.max ? "all-in" : potPct !== null ? `${Math.max(0, potPct)}% pot` : "",
+        advised !== null && amount === advised ? "advised" : ""
+      ].filter(Boolean).join(" \xB7 ");
+      range.setAttribute("aria-valuetext", `${readout.textContent}, ${sub.textContent.split(" \xB7 ").join(", ")}`);
+      for (const c of chips) c.button.setAttribute("aria-pressed", String(Math.abs(c.at() - amount) < 0.5));
+    };
+    const showFailure = () => {
+      note.textContent = MISSING_BOX;
+      note.style.color = THEME.bad;
+      note.classList.add("tp-bet-error");
+    };
+    const pick = (amount, exact = false) => {
+      const v = exact ? bound(amount) : snap(amount);
+      range.value = String(v);
+      show(v);
+      if (r.onChange(v)) {
+        note.textContent = "Filled in Torn\u2019s bet box. Press Torn\u2019s button to bet.";
+        note.style.color = "";
+        note.classList.remove("tp-bet-error");
+      } else showFailure();
+    };
+    const stepFrom = (n) => {
+      let v = Number(range.value);
+      for (let i = 0; i < Math.abs(n); i++) {
+        v = bound(n > 0 ? (Math.floor(v / step + 1e-9) + 1) * step : (Math.ceil(v / step - 1e-9) - 1) * step);
+      }
+      return v;
+    };
+    wrap.addEventListener(SET_AMOUNT, (e) => {
+      const amount = Number(e.detail);
+      if (!Number.isFinite(amount)) return;
+      range.value = String(bound(amount));
+      show(bound(amount));
+    });
+    wrap.addEventListener(FILL_FAILED, showFailure);
+    range.addEventListener("input", guard("bet slider", () => pick(Number(range.value))));
+    range.addEventListener("keydown", guard("bet slider key", (e) => {
+      const jump = {
+        ArrowRight: () => stepFrom(1),
+        ArrowUp: () => stepFrom(1),
+        ArrowLeft: () => stepFrom(-1),
+        ArrowDown: () => stepFrom(-1),
+        PageUp: () => stepFrom(10),
+        PageDown: () => stepFrom(-10),
+        Home: () => r.min,
+        End: () => r.max
+      };
+      const to = jump[e.key];
+      if (!to) return;
+      e.preventDefault();
+      pick(to(), e.key === "Home" || e.key === "End");
+    }));
+    const quick = el(doc, "div", "tp-bet-quick");
+    const chip = (label, amount, exact = false) => {
+      const b = el(doc, "button", "tp-btn", label);
+      b.type = "button";
+      chips.push({ button: b, at: () => exact ? bound(amount) : snap(amount) });
+      b.addEventListener("click", guard(`bet ${label}`, () => pick(amount, exact)));
+      quick.append(b);
+      return b;
+    };
+    chip("Min", r.min, true);
+    chip("\xBD pot", potSized(r, 0.5));
+    chip("\u2154 pot", potSized(r, 2 / 3));
+    chip("Pot", potSized(r, 1));
+    chip("All-in", r.max, true);
+    if (advised !== null) chip("Advised", advised, true).classList.add("tp-bet-advised");
+    const start = advised ?? r.min;
+    range.value = String(start);
+    show(start);
+    wrap.append(head, sub, track);
+    if (opts.chips !== false) wrap.append(quick);
+    wrap.append(note);
+    return wrap;
+  }
+
+  // src/ui/help-list.ts
+  function helpList(doc, summary, items) {
+    const box = doc.createElement("details");
+    box.className = "tp-help";
+    const head = doc.createElement("summary");
+    head.textContent = summary;
+    box.append(head);
+    for (const [name, text] of items) {
+      const p = doc.createElement("p");
+      const b = doc.createElement("b");
+      b.textContent = name;
+      p.append(b, ` ${text}`);
+      box.append(p);
+    }
+    return box;
+  }
+
+  // src/ui/meters.ts
+  var pct2 = (x) => `${Math.round(x * 100)}%`;
+  var clamp01 = (x) => Math.min(1, Math.max(0, x));
+  function strengthColor(value) {
+    return value >= 0.66 ? THEME.good : value >= 0.33 ? THEME.warning : THEME.bad;
+  }
+  function winColor(equity, potOdds) {
+    if (potOdds !== null) return equity >= potOdds ? THEME.good : THEME.bad;
+    return strengthColor(equity);
+  }
+  function winText(a) {
+    const n = a.opponents;
+    const vs = n === void 0 ? "" : ` vs ${n} ${n === 1 ? "player" : "players"}`;
+    return `${pct2(a.equity)}${vs}${a.potOdds !== null ? ` \xB7 need ${pct2(a.potOdds)}` : ""}`;
+  }
+  function drawText(d) {
+    return `${d.name} \xB7 ${d.outs} ${d.outs === 1 ? "out" : "outs"} \xB7 ${pct2(d.hitChance)} by the river`;
+  }
+  function buildMeters(doc, a) {
+    const el2 = (tag2, cls, text) => {
+      const e = doc.createElement(tag2);
+      if (cls) e.className = cls;
+      if (text !== void 0) e.textContent = text;
+      return e;
+    };
+    const meter = (label, value, color, text, help, mark) => {
+      const row = el2("div", "tp-meter");
+      row.title = help;
+      const bar = el2("div", "tp-meter-bar");
+      bar.setAttribute("aria-hidden", "true");
+      const fill = el2("div", "tp-meter-fill");
+      fill.style.width = pct2(clamp01(value));
+      fill.style.background = color;
+      bar.append(fill);
+      if (mark !== void 0) {
+        const tick = el2("div", "tp-meter-mark");
+        tick.style.left = pct2(clamp01(mark));
+        bar.append(tick);
+      }
+      row.append(el2("span", "tp-meter-label", label), bar, el2("span", "tp-meter-text", text));
+      return row;
+    };
+    const box = el2("div", "tp-meters");
+    const helps = [];
+    const add2 = (label, value, color, text, help, mark) => {
+      box.append(meter(label, value, color, text, help, mark));
+      helps.push([label, help]);
+    };
+    if (a.strength) {
+      add2(
+        "Hand",
+        a.strength.value,
+        strengthColor(a.strength.value),
+        `${a.hand} \xB7 ${a.strength.note.toLowerCase()}`,
+        "Hand strength on its own: before the flop, how your two cards rank among all starting hands; after it, how many possible hands you beat right now."
+      );
+    }
+    if (a.draw) {
+      add2(
+        "Draw",
+        a.draw.hitChance,
+        THEME.draw,
+        drawText(a.draw),
+        "Cards that would complete your draw, and the chance one arrives by the river. On the flop you may have to pay again on the turn, so the Win line is the better guide to calling."
+      );
+    }
+    add2(
+      "Win",
+      a.equity,
+      winColor(a.equity, a.potOdds),
+      winText(a),
+      "Chance of winning the pot against the players still in, given how they play. \u201CNeed\u201D is what a call has to win to break even.",
+      a.potOdds ?? void 0
+    );
+    box.append(helpList(doc, "What these mean", helps));
+    return box;
+  }
+
+  // src/ui/format.ts
+  function formatMoney(n) {
+    const body = Math.abs(n).toLocaleString("en-US");
+    return n > 0 ? `+${body}` : n < 0 ? `\u2212${body}` : body;
+  }
+  function formatBB(n) {
+    const r = Number(n.toFixed(2));
+    const body = Math.abs(r).toString();
+    return `${r > 0 ? "+" : r < 0 ? "\u2212" : ""}${body} BB`;
+  }
+
   // src/core/cards.ts
   var SUIT_NAMES = ["clubs", "diamonds", "hearts", "spades"];
   var SUIT_SYMBOLS = ["\u2663", "\u2666", "\u2665", "\u2660"];
@@ -401,6 +872,1112 @@
     return c & 3;
   }
 
+  // src/results/results.ts
+  var KEY = "results";
+  var SAVE_DELAY_MS = 3e4;
+  var MAX_PENDING = 20;
+  var RECENT = 20;
+  var MAX_HANDS = 5e3;
+  var family = (a) => a === "bet" || a === "raise" || a === "allin" ? "aggressive" : a;
+  var num = (v) => typeof v === "number" && Number.isFinite(v);
+  var STREETS = /* @__PURE__ */ new Set(["preflop", "flop", "turn", "river"]);
+  var ACTIONS = /* @__PURE__ */ new Set(["fold", "check", "call", "bet", "raise", "allin"]);
+  function isHeroHand(v) {
+    if (v === null || typeof v !== "object") return false;
+    const h = v;
+    const step = (x) => {
+      if (x === null || typeof x !== "object") return false;
+      const s = x;
+      return STREETS.has(s.street) && ACTIONS.has(s.action);
+    };
+    return typeof h.handId === "string" && (h.tableId === null || num(h.tableId)) && (h.bigBlind === void 0 || num(h.bigBlind) && h.bigBlind > 0) && (h.board === void 0 || Array.isArray(h.board) && h.board.length <= 5 && h.board.every(num)) && num(h.at) && (h.cards === null || Array.isArray(h.cards) && h.cards.length === 2 && h.cards.every(num)) && num(h.invested) && num(h.won) && num(h.net) && (h.followed === null || typeof h.followed === "boolean") && Array.isArray(h.taken) && h.taken.every(step) && Array.isArray(h.advice) && h.advice.every((a) => step(a) && (a.amount === null || num(a.amount)));
+  }
+  function validHands(v) {
+    if (v === null || typeof v !== "object") return null;
+    const o = v;
+    if (o.version !== 1 || !Array.isArray(o.hands)) return null;
+    return o.hands.filter(isHeroHand);
+  }
+  var Results = class {
+    constructor(store2) {
+      this.store = store2;
+      let stored;
+      try {
+        stored = store2.get(KEY);
+      } catch (err) {
+        console.warn("[torn-poker] failed to read results", err);
+      }
+      this.hands = (validHands(stored) ?? []).slice(-MAX_HANDS);
+    }
+    store;
+    hands = [];
+    /** advice per hand, in the order it was given */
+    pending = /* @__PURE__ */ new Map();
+    timer = null;
+    recordAdvice(handId, street, a) {
+      let advice = this.pending.get(handId);
+      if (!advice) {
+        advice = [];
+        this.pending.set(handId, advice);
+        while (this.pending.size > MAX_PENDING) {
+          const oldest = this.pending.keys().next().value;
+          this.pending.delete(oldest);
+        }
+      }
+      advice.push({ street, action: a.action, amount: a.amount });
+    }
+    /** the stored hand, or null when nothing was stored (hero not dealt in, no result, or a repeat) */
+    recordHand(hand) {
+      const pending = this.pending.get(hand.handId);
+      this.pending.delete(hand.handId);
+      if (!hand.dealtIn.some((p) => p.userID === hand.heroId)) return null;
+      if (Object.keys(hand.winnings).length === 0) return null;
+      if (this.hands.some((h) => h.handId === hand.handId)) return null;
+      const advice = pending ?? [];
+      const taken = hand.actions.filter((a) => a.userID === hand.heroId).map((a) => ({ street: a.street, action: a.action }));
+      const seen = /* @__PURE__ */ new Map();
+      const followed = advice.length === 0 ? null : advice.every((a) => {
+        const i = seen.get(a.street) ?? 0;
+        seen.set(a.street, i + 1);
+        const t = taken.filter((x) => x.street === a.street)[i];
+        return t !== void 0 && family(t.action) === family(a.action);
+      });
+      const invested = hand.invested[hand.heroId] ?? 0;
+      const won = hand.winnings[hand.heroId] ?? 0;
+      const stored = {
+        handId: hand.handId,
+        tableId: hand.tableId,
+        ...hand.bigBlind > 0 ? { bigBlind: hand.bigBlind } : {},
+        at: hand.endedAt,
+        cards: hand.heroCards,
+        ...hand.board.length > 0 ? { board: [...hand.board] } : {},
+        invested,
+        won,
+        net: won - invested,
+        advice,
+        taken,
+        followed
+      };
+      this.hands.push(stored);
+      if (this.hands.length > MAX_HANDS) this.hands.splice(0, this.hands.length - MAX_HANDS);
+      if (this.timer === null) this.timer = setTimeout(() => this.flush(), SAVE_DELAY_MS);
+      return stored;
+    }
+    summary(now) {
+      const hs = this.hands;
+      let session = [];
+      const last = hs[hs.length - 1];
+      if (last && now - last.at < SESSION_GAP_MS) {
+        let start = hs.length - 1;
+        while (start > 0 && hs[start].at - hs[start - 1].at < SESSION_GAP_MS) start--;
+        session = hs.slice(start);
+      }
+      return {
+        session: tally(session),
+        allTime: tally(hs),
+        followed: tally(hs.filter((h) => h.followed === true)),
+        ignored: tally(hs.filter((h) => h.followed === false)),
+        recent: hs.slice(-RECENT).reverse(),
+        insights: computeInsights(hs, now)
+      };
+    }
+    flush() {
+      if (this.timer !== null) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+      try {
+        this.store.set(KEY, this.snapshot());
+      } catch (err) {
+        console.warn("[torn-poker] failed to save results", err);
+      }
+    }
+    exportJSON() {
+      return JSON.stringify(this.snapshot(), null, 2);
+    }
+    importJSON(text) {
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error("Not a results export");
+      }
+      const incoming = validHands(parsed);
+      if (!incoming) throw new Error("Not a results export");
+      const known = new Set(this.hands.map((h) => h.handId));
+      const fresh = incoming.filter((h) => !known.has(h.handId));
+      this.hands = [...this.hands, ...fresh].sort((a, b) => a.at - b.at).slice(-MAX_HANDS);
+      this.flush();
+      return fresh.length;
+    }
+    snapshot() {
+      return { version: 1, hands: this.hands };
+    }
+  };
+
+  // src/results/review.ts
+  var STREETS2 = ["preflop", "flop", "turn", "river"];
+  var BOARD_LEN = { preflop: 0, flop: 3, turn: 4, river: 5 };
+  var STREET_NAME = { preflop: "Preflop", flop: "Flop", turn: "Turn", river: "River" };
+  var WHERE = { preflop: "before the flop", flop: "on the flop", turn: "on the turn", river: "on the river" };
+  var DID = { fold: "Folded", check: "Checked", call: "Called", bet: "Bet", raise: "Raised", allin: "Went all in" };
+  var ADVISED = { fold: "Fold", check: "Check", call: "Call", bet: "Bet", raise: "Raise to", allin: "All in" };
+  var TO = { fold: "fold", check: "check", call: "call", bet: "bet", raise: "raise", allin: "go all in" };
+  var NOUN = { fold: "a fold", check: "a check", call: "a call", bet: "a bet", raise: "a raise", allin: "an all-in" };
+  var streetName = (s) => STREET_NAME[s];
+  var dollars = (n) => `$${Math.abs(n).toLocaleString("en-US")}`;
+  function adviceText(action, amount, bigBlind) {
+    if (amount === null) return ADVISED[action];
+    const money = dollars(amount);
+    return bigBlind ? `${ADVISED[action]} ${Number((amount / bigBlind).toFixed(2))} BB (${money})` : `${ADVISED[action]} ${money}`;
+  }
+  function resultPhrase(net, bigBlind) {
+    if (net === 0) return "you broke even";
+    const size = bigBlind ? `${Number((Math.abs(net) / bigBlind).toFixed(2))} BB` : dollars(net);
+    return `you ${net > 0 ? "won" : "lost"} ${size}`;
+  }
+  function takeawayFor(row, net, bigBlind) {
+    const adv = row.advised;
+    const did = row.did;
+    const result = resultPhrase(net, bigBlind);
+    const lead = `You ${DID[did.action].toLowerCase()} ${WHERE[row.street]} when the advice was to ${TO[adv.action]}`;
+    const advFam = family(adv.action);
+    const didFam = family(did.action);
+    if (advFam === "fold") {
+      if (net < 0) return `${lead} \u2014 ${result}; folding might have saved some of that.`;
+      if (net > 0) return `${lead} \u2014 ${result}. It worked out this time, but one win does not make it the better choice.`;
+      return `${lead} \u2014 ${result}.`;
+    }
+    if (didFam === "fold") return `${lead} \u2014 ${result}; staying in might have turned out differently.`;
+    if (advFam === "aggressive") {
+      return net > 0 ? `${lead} \u2014 ${result}; ${NOUN[adv.action]} might have won more.` : `${lead} \u2014 ${result}; ${NOUN[adv.action]} might have turned out differently.`;
+    }
+    if (didFam === "aggressive") {
+      if (net > 0) return `${lead} \u2014 ${result}. It worked out, but it risked more than the advice did.`;
+      if (net < 0) return `${lead} \u2014 ${result}; ${NOUN[adv.action]} would have risked less.`;
+      return `${lead} \u2014 ${result}.`;
+    }
+    return `${lead} \u2014 ${result}.`;
+  }
+  function buildReview(hand) {
+    const board = hand.board ?? [];
+    const bb = hand.bigBlind;
+    const rows = [];
+    for (const street of STREETS2) {
+      const advice = hand.advice.filter((a) => a.street === street);
+      const taken = hand.taken.filter((t) => t.street === street);
+      for (let i = 0; i < Math.max(advice.length, taken.length); i++) {
+        const a = advice[i];
+        const t = taken[i];
+        rows.push({
+          street,
+          again: i > 0,
+          board: board.slice(0, BOARD_LEN[street]),
+          advised: a ? { action: a.action, amount: a.amount, text: adviceText(a.action, a.amount, bb) } : null,
+          did: t ? { action: t.action, text: DID[t.action] } : null,
+          matched: a && t ? family(a.action) === family(t.action) : null
+        });
+      }
+    }
+    const deepest = rows.reduce((n, r) => Math.max(n, r.board.length), 0);
+    const first = rows.find((r) => r.matched === false);
+    return {
+      cards: hand.cards,
+      net: hand.net,
+      netBB: bb ? hand.net / bb : null,
+      resultText: bb ? `${formatBB(hand.net / bb)} (${formatMoney(hand.net)})` : formatMoney(hand.net),
+      rows,
+      runout: board.length > deepest ? board : null,
+      takeaway: first ? takeawayFor(first, hand.net, bb) : null
+    };
+  }
+
+  // src/ui/hand-review.ts
+  var REVIEW_CSS = `
+#tp-advisor .tp-cards{display:inline-flex;flex-wrap:wrap;gap:5px;vertical-align:baseline}
+#tp-advisor .tp-card{font-weight:700;white-space:nowrap}
+#tp-advisor .tp-card-red{color:${THEME.bad}}
+#tp-advisor .tp-hand-item{border-bottom:1px solid #252525}
+#tp-advisor button.tp-hand-row{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;min-height:28px;margin:0;padding:2px 0;text-align:left;font:inherit;line-height:1.3;cursor:pointer;color:inherit!important;background:none!important;border:0!important;border-radius:3px;text-shadow:none;box-shadow:none;height:auto;font-variant-numeric:tabular-nums}
+#tp-advisor button.tp-hand-row:hover{background:rgba(255,255,255,.05)!important}
+#tp-advisor .tp-hand-main{display:flex;align-items:center;gap:6px}
+#tp-advisor .tp-hand-chevron{display:inline-block;width:10px;color:${THEME.muted};font-size:11px}
+#tp-advisor .tp-hand-side{display:flex;align-items:center;gap:8px;text-align:right}
+#tp-advisor .tp-review{margin:8px 0;padding:8px 10px;border:1px solid #333;border-radius:6px;background:#202020;font-variant-numeric:tabular-nums}
+#tp-advisor .tp-hand-item>.tp-review{margin:4px 0 8px}
+#tp-advisor .tp-review-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+#tp-advisor .tp-review-title{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:${THEME.muted};margin-bottom:4px}
+#tp-advisor .tp-review-result{font-weight:700}
+#tp-advisor .tp-review-rows{list-style:none;margin:6px 0 0;padding:0}
+#tp-advisor .tp-review-row{padding:5px 0;border-top:1px solid #252525}
+#tp-advisor .tp-review-street{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;font-weight:600}
+#tp-advisor .tp-review-line{display:flex;gap:8px;align-items:baseline}
+#tp-advisor .tp-review-label{flex:0 0 52px;font-size:11px;color:${THEME.muted}}
+#tp-advisor .tp-review-match{margin-left:auto;font-size:11px;font-weight:700;white-space:nowrap}
+#tp-advisor .tp-review-take{margin:8px 0 0;font-size:12px}
+#tp-advisor .tp-review-none{margin:6px 0 0;font-size:12px;color:${THEME.muted}}
+`;
+  var make = (doc, tag2, cls, text) => {
+    const e = doc.createElement(tag2);
+    if (cls) e.className = cls;
+    if (text !== void 0) e.textContent = text;
+    return e;
+  };
+  function cardsEl(doc, cards) {
+    const wrap = make(doc, "span", "tp-cards");
+    if (cards === null || cards.length === 0) {
+      wrap.textContent = "Cards not seen";
+      wrap.classList.add("tp-muted");
+      return wrap;
+    }
+    for (const c of cards) {
+      const red = suitOf(c) === 1 || suitOf(c) === 2;
+      wrap.append(make(doc, "span", red ? "tp-card tp-card-red" : "tp-card", formatCard(c)));
+    }
+    return wrap;
+  }
+  function buildReviewCard(doc, r, heading) {
+    const card = make(doc, "section", "tp-review");
+    card.setAttribute("aria-label", "Hand review");
+    if (heading) card.append(make(doc, "div", "tp-review-title", heading));
+    const head = make(doc, "div", "tp-review-head");
+    const mine = make(doc, "span");
+    mine.append("Your cards ", cardsEl(doc, r.cards));
+    const result = make(doc, "span", "tp-review-result", r.resultText);
+    result.style.color = r.net > 0 ? THEME.good : r.net < 0 ? THEME.bad : THEME.muted;
+    head.append(mine, result);
+    card.append(head);
+    if (r.rows.length === 0) {
+      card.append(make(doc, "div", "tp-review-none", "No advice or actions were recorded for this hand."));
+    } else {
+      const list = make(doc, "ol", "tp-review-rows");
+      for (const row of r.rows) {
+        const li = make(doc, "li", "tp-review-row");
+        const street = make(doc, "div", "tp-review-street");
+        street.append(make(doc, "span", void 0, row.again ? `${streetName(row.street)}, again` : streetName(row.street)));
+        if (row.board.length > 0) street.append(cardsEl(doc, row.board));
+        const advice = make(doc, "div", "tp-review-line");
+        advice.append(make(doc, "span", "tp-review-label", "Advice"), make(doc, "span", void 0, row.advised?.text ?? "None recorded"));
+        const did = make(doc, "div", "tp-review-line");
+        did.append(make(doc, "span", "tp-review-label", "You"), make(doc, "span", void 0, row.did?.text ?? "No action"));
+        if (row.matched !== null) {
+          const m = make(doc, "span", "tp-review-match", row.matched ? "Matched" : "Differed");
+          m.style.color = row.matched ? THEME.good : THEME.warning;
+          did.append(m);
+        }
+        li.append(street, advice, did);
+        list.append(li);
+      }
+      card.append(list);
+    }
+    if (r.runout) {
+      const line = make(doc, "div", "tp-review-line");
+      line.style.marginTop = "4px";
+      line.append(make(doc, "span", "tp-review-label", "Board"), cardsEl(doc, r.runout));
+      card.append(line);
+    }
+    if (r.takeaway) card.append(make(doc, "p", "tp-review-take", r.takeaway));
+    return card;
+  }
+
+  // src/ui/panel.ts
+  var STATUS_TEXT = {
+    "not-seated": "Not seated",
+    waiting: "Waiting for your turn",
+    "no-cards": "No hole cards seen this hand",
+    thinking: "Thinking\u2026",
+    unreadable: "Can\u2019t read the table \u2014 advice paused",
+    tournament: "Tournament table \u2014 advice off"
+  };
+  var UI_KEY = "tp-advisor-ui";
+  var FALLBACK_HEIGHT = 40;
+  var DEFAULT_TOP = 120;
+  var CARDS_HIDDEN = "tp-cards-hidden";
+  function warn(what, e) {
+    console.warn(`[torn-poker] ${what}`, e);
+  }
+  function loadUi() {
+    const s = { left: null, top: null, minimised: false, showCards: true, hidden: false, stopLoss: null, winTarget: null };
+    try {
+      const p = JSON.parse(localStorage.getItem(UI_KEY) ?? "null");
+      if (p && Number.isFinite(p.left) && Number.isFinite(p.top)) {
+        s.left = p.left;
+        s.top = p.top;
+      }
+      if (p && p.minimised === true) s.minimised = true;
+      if (p && p.showCards === false) s.showCards = false;
+      if (p && p.hidden === true) s.hidden = true;
+      if (p && Number.isFinite(p.stopLoss) && p.stopLoss > 0) s.stopLoss = p.stopLoss;
+      if (p && Number.isFinite(p.winTarget) && p.winTarget > 0) s.winTarget = p.winTarget;
+    } catch {
+    }
+    return s;
+  }
+  function saveUi(s) {
+    try {
+      localStorage.setItem(UI_KEY, JSON.stringify(s));
+    } catch {
+    }
+  }
+  function netColor(n) {
+    return n > 0 ? THEME.good : n < 0 ? THEME.bad : THEME.muted;
+  }
+  function actionColor(action) {
+    switch (action) {
+      case "raise":
+      case "bet":
+      case "allin":
+        return THEME.good;
+      case "call":
+      case "check":
+        return "#5aa0e0";
+      default:
+        return THEME.bad;
+    }
+  }
+  function actionLine(a) {
+    const dollars2 = a.amount === null ? "" : a.amount.toLocaleString("en-US");
+    const amt = a.amount !== null && a.bigBlind > 0 ? `${Number((a.amount / a.bigBlind).toFixed(2))} BB ($${dollars2})` : dollars2;
+    switch (a.action) {
+      case "raise":
+        return amt ? `RAISE to ${amt}` : "RAISE";
+      case "bet":
+        return amt ? `BET ${amt}` : "BET";
+      case "allin":
+        return amt ? `ALL-IN ${amt}` : "ALL-IN";
+      case "call":
+        return "CALL";
+      case "check":
+        return "CHECK";
+      default:
+        return "FOLD";
+    }
+  }
+  var pct3 = (x) => `${Math.round(x * 100)}%`;
+  var mounted = /* @__PURE__ */ new WeakMap();
+  function mountPanel(doc, h) {
+    mounted.get(doc)?.();
+    const win = doc.defaultView;
+    const ui = loadUi();
+    const el2 = (tag2, cls, text) => {
+      const e = doc.createElement(tag2);
+      if (cls) e.className = cls;
+      if (text !== void 0) e.textContent = text;
+      return e;
+    };
+    const guard2 = (what, fn) => (...args) => {
+      try {
+        fn(...args);
+      } catch (e) {
+        warn(`${what} failed`, e);
+      }
+    };
+    const kv = (label, value, color) => {
+      const row2 = el2("div", "tp-kv");
+      const v = el2("span", void 0, value);
+      if (color) v.style.color = color;
+      row2.append(el2("span", "tp-muted", label), v);
+      return row2;
+    };
+    const style = el2("style");
+    style.id = "tp-advisor-style";
+    style.textContent = `${PANEL_CSS}${REVIEW_CSS}.${CARDS_HIDDEN} #tp-cards{display:none!important}
+`;
+    const root = el2("div");
+    root.id = "tp-advisor";
+    const title = el2("span", "tp-title");
+    const grip = el2("span", "tp-grip", "\u283F ");
+    grip.setAttribute("aria-hidden", "true");
+    title.append(grip, "Poker Advisor");
+    const headNet = el2("span", "tp-head-net");
+    headNet.title = "Session net";
+    const minBtn = el2("button", "tp-min", "\u2013");
+    minBtn.type = "button";
+    minBtn.setAttribute("aria-controls", "tp-advisor-content");
+    const labelMin = () => {
+      const label = ui.minimised ? "Expand" : "Minimise";
+      minBtn.title = label;
+      minBtn.setAttribute("aria-label", label);
+      minBtn.setAttribute("aria-expanded", String(!ui.minimised));
+    };
+    const head = el2("div", "tp-head");
+    head.append(title, headNet, minBtn);
+    const tabsEl = el2("div", "tp-tabs");
+    tabsEl.setAttribute("role", "tablist");
+    tabsEl.setAttribute("aria-label", "Advisor sections");
+    const bodies = {
+      advice: el2("div", "tp-body"),
+      results: el2("div", "tp-body"),
+      settings: el2("div", "tp-body")
+    };
+    const tabBtns = {};
+    const showTab = (t) => {
+      Object.keys(bodies).forEach((k) => {
+        bodies[k].style.display = k === t ? "" : "none";
+        tabBtns[k].setAttribute("aria-selected", String(k === t));
+        tabBtns[k].tabIndex = k === t ? 0 : -1;
+      });
+    };
+    const TABS = [["advice", "Advice"], ["results", "Results"], ["settings", "Settings"]];
+    for (const [t, label] of TABS) {
+      bodies[t].id = `tp-panel-${t}`;
+      bodies[t].setAttribute("role", "tabpanel");
+      bodies[t].setAttribute("aria-labelledby", `tp-tab-${t}`);
+      const b = el2("button", "tp-tab", label);
+      b.type = "button";
+      b.id = `tp-tab-${t}`;
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-controls", `tp-panel-${t}`);
+      b.addEventListener("click", guard2("tab", () => showTab(t)));
+      b.addEventListener("keydown", guard2("tab keys", (e) => {
+        const at = TABS.findIndex(([k]) => k === t);
+        const to = e.key === "ArrowRight" ? at + 1 : e.key === "ArrowLeft" ? at - 1 : e.key === "Home" ? 0 : e.key === "End" ? TABS.length - 1 : null;
+        if (to === null) return;
+        e.preventDefault();
+        const next = TABS[(to + TABS.length) % TABS.length][0];
+        showTab(next);
+        tabBtns[next].focus();
+      }));
+      tabBtns[t] = b;
+      tabsEl.append(b);
+    }
+    const alertEl = el2("div", "tp-alert");
+    alertEl.style.display = "none";
+    alertEl.setAttribute("role", "status");
+    alertEl.setAttribute("aria-live", "polite");
+    const alertText = el2("span");
+    const alertClose = el2("button", "tp-alert-close", "\xD7");
+    alertClose.type = "button";
+    alertClose.title = "Dismiss";
+    alertClose.setAttribute("aria-label", "Dismiss");
+    alertClose.addEventListener("click", guard2("dismiss alert", () => {
+      alertEl.style.display = "none";
+    }));
+    alertEl.append(alertText, alertClose);
+    const content = el2("div");
+    content.id = "tp-advisor-content";
+    content.append(tabsEl, bodies.advice, bodies.results, bodies.settings);
+    root.append(head, alertEl, content);
+    const applyMin = () => {
+      content.style.display = ui.minimised ? "none" : "";
+      labelMin();
+      doc.body.classList.toggle(CARDS_HIDDEN, ui.minimised || !ui.showCards);
+    };
+    let docked = false;
+    const clamp = () => {
+      if (docked) return;
+      const w = root.offsetWidth || PANEL_WIDTH;
+      const ht = root.offsetHeight || FALLBACK_HEIGHT;
+      const docEl = doc.documentElement;
+      const vw = docEl.clientWidth > 0 ? docEl.clientWidth : win?.innerWidth ?? Infinity;
+      const vh = docEl.clientHeight > 0 ? docEl.clientHeight : win?.innerHeight ?? Infinity;
+      const maxLeft = Math.max(0, vw - w);
+      const maxTop = Math.max(0, vh - ht);
+      const left = ui.left ?? (Number.isFinite(vw) ? vw - w - 16 : null);
+      const top = ui.top ?? DEFAULT_TOP;
+      if (left === null) return;
+      const l = Math.min(Math.max(0, left), maxLeft);
+      const t = Math.min(Math.max(0, top), maxTop);
+      if (ui.left !== null) {
+        ui.left = l;
+        ui.top = t;
+      }
+      root.style.left = `${l}px`;
+      root.style.top = `${t}px`;
+      root.style.right = "auto";
+    };
+    minBtn.addEventListener("click", guard2("minimise", () => {
+      ui.minimised = !ui.minimised;
+      applyMin();
+      clamp();
+      saveUi(ui);
+    }));
+    const onResize = guard2("resize", clamp);
+    win?.addEventListener("resize", onResize);
+    let endDrag = null;
+    const onBlur = () => {
+      try {
+        endDrag?.();
+      } catch (e) {
+        warn("drag end failed", e);
+      }
+    };
+    win?.addEventListener("blur", onBlur);
+    head.addEventListener("mousedown", (down) => {
+      try {
+        if (docked || down.button !== 0 || down.target === minBtn) return;
+        endDrag?.();
+        const rect = root.getBoundingClientRect();
+        const dx = down.clientX - rect.left;
+        const dy = down.clientY - rect.top;
+        down.preventDefault();
+        down.stopPropagation();
+        let moved = false;
+        const stop = () => {
+          doc.removeEventListener("mousemove", move, true);
+          doc.removeEventListener("mouseup", up, true);
+          endDrag = null;
+          if (moved) saveUi(ui);
+        };
+        const move = (e) => {
+          try {
+            if (e.buttons === 0) {
+              stop();
+              return;
+            }
+            e.stopPropagation();
+            moved = true;
+            ui.left = e.clientX - dx;
+            ui.top = e.clientY - dy;
+            clamp();
+          } catch (err) {
+            warn("panel drag failed", err);
+          }
+        };
+        const up = (e) => {
+          try {
+            e.stopPropagation();
+            stop();
+          } catch (err) {
+            warn("panel drag end failed", err);
+          }
+        };
+        endDrag = stop;
+        doc.addEventListener("mousemove", move, true);
+        doc.addEventListener("mouseup", up, true);
+      } catch (err) {
+        warn("panel drag start failed", err);
+      }
+    });
+    const adviceBox = el2("div");
+    const youLine = el2("button", "tp-you tp-muted");
+    youLine.type = "button";
+    youLine.title = "Show your stats";
+    youLine.addEventListener("click", guard2("hero line", () => showTab("results")));
+    const reminderEl = el2("div", "tp-reminder");
+    reminderEl.style.display = "none";
+    reminderEl.setAttribute("role", "status");
+    reminderEl.setAttribute("aria-live", "polite");
+    const reviewBox = el2("div");
+    bodies.advice.append(adviceBox, reviewBox, reminderEl);
+    function showReview(review) {
+      try {
+        reviewBox.replaceChildren(...review ? [buildReviewCard(doc, review, "Your last hand")] : []);
+      } catch (e) {
+        warn("showReview failed", e);
+      }
+    }
+    function reminder(text) {
+      try {
+        reminderEl.textContent = text;
+        reminderEl.style.display = text ? "" : "none";
+      } catch (e) {
+        warn("reminder failed", e);
+      }
+    }
+    function renderYou(hero) {
+      if (!hero || hero.hands <= 0) {
+        youLine.remove();
+        return;
+      }
+      const st = classify(hero);
+      const r = rates(hero);
+      const known = hero.hands >= MIN_HANDS_FOR_STYLE && r.vpip !== null;
+      const badge = el2("span", void 0, known ? STYLES[st].short : STYLES.Unknown.short);
+      badge.style.color = STYLE_TEXT[st];
+      badge.style.fontWeight = "bold";
+      const rest = known ? ` \xB7 play ${formatStat("vpip", r.vpip)}, raise ${formatStat("pfr", r.pfr)} \xB7 ${hero.hands} hands` : ` \xB7 ${hero.hands}/${MIN_HANDS_FOR_STYLE} hands`;
+      youLine.replaceChildren("You: ", badge, rest);
+      bodies.advice.append(youLine);
+    }
+    const render = (target, build2) => {
+      const tmp = el2("div");
+      build2(tmp);
+      target.replaceChildren(...Array.from(tmp.childNodes));
+    };
+    function setStatus(s, detail) {
+      try {
+        render(adviceBox, (box) => {
+          box.append(el2("div", void 0, STATUS_TEXT[s]));
+          if (detail) box.append(el2("div", "tp-muted", detail));
+        });
+      } catch (e) {
+        warn("setStatus failed", e);
+      }
+    }
+    function showAdvice(a, opts) {
+      try {
+        render(adviceBox, (box) => {
+          if (opts?.preview) {
+            box.append(el2("div", "tp-preview-label", "If it comes to you \xB7 updates as players act"));
+          } else {
+            box.append(el2("div", "tp-turn-label", "Your turn"));
+          }
+          const big = el2("div", opts?.preview ? "tp-big tp-big-preview" : "tp-big", actionLine(a));
+          big.style.color = actionColor(a.action);
+          box.append(big);
+          if (opts?.bet && !opts.preview) box.append(buildBetSlider(doc, a, opts.bet));
+          box.append(buildMeters(doc, a));
+          if (!a.strength) box.append(kv("Hand", a.hand));
+          box.append(kv("Position", a.position));
+          if (a.potOdds !== null) box.append(kv("Pot odds to call", pct3(a.potOdds)));
+          if (a.facing) box.append(kv("Facing", `${a.facing.name} \xB7 ${a.facing.style}`));
+          const reason = el2("div", "tp-muted", a.reason);
+          reason.style.marginTop = "6px";
+          box.append(reason);
+          if (a.detail.length > 0) {
+            const list = el2("ul");
+            for (const d of a.detail) list.append(el2("li", void 0, d));
+            list.style.display = "none";
+            list.id = "tp-reasons";
+            const more = el2("button", "tp-btn", "Show Reasons");
+            more.type = "button";
+            more.setAttribute("aria-expanded", "false");
+            more.setAttribute("aria-controls", list.id);
+            more.addEventListener("click", guard2("reasons toggle", () => {
+              const open = list.style.display === "none";
+              list.style.display = open ? "" : "none";
+              more.textContent = open ? "Hide Reasons" : "Show Reasons";
+              more.setAttribute("aria-expanded", String(open));
+            }));
+            box.append(more, list);
+          }
+          const chip = el2("div", "tp-chip", `${a.confidence} confidence`);
+          chip.style.color = a.confidence === "high" ? THEME.good : a.confidence === "medium" ? THEME.warning : THEME.bad;
+          box.append(chip);
+        });
+      } catch (e) {
+        warn("showAdvice failed", e);
+        setStatus("unreadable");
+      }
+    }
+    function heroSection(hero) {
+      const sec = el2("div", "tp-hero");
+      sec.style.marginBottom = "8px";
+      sec.append(el2("h4", "tp-heading", "Your play"));
+      if (!hero || hero.hands <= 0) {
+        sec.append(el2("div", "tp-muted", "No hands recorded yet."));
+        return sec;
+      }
+      const style2 = classify(hero);
+      const badge = el2("span", void 0, style2);
+      badge.className = "tp-style-badge";
+      badge.style.background = BADGE[style2];
+      sec.append(badge, el2("div", "tp-muted", `${hero.hands} hands${hero.hands < LOW_SAMPLE ? " \xB7 low sample" : ""}`));
+      if (style2 !== "Unknown") sec.append(el2("div", "tp-style-about", STYLES[style2].about));
+      const r = rates(hero);
+      const list = el2("div", "tp-stats");
+      for (const key of ["vpip", "pfr", "threeBet", "af", "foldToRaise", "wtsd"]) {
+        const info = STATS[key];
+        const v = verdict(key, r[key]);
+        const item = el2("div", "tp-stat-row");
+        item.title = info.help;
+        const top = el2("div", "tp-kv");
+        const name = el2("span", void 0, info.label);
+        name.append(el2("small", "tp-abbr", ` ${info.abbr}`));
+        const value = el2("b", void 0, formatStat(key, r[key]));
+        value.style.color = v === "good" ? THEME.good : v === "unknown" ? THEME.text : THEME.warning;
+        top.append(name, value);
+        const hint = v === "low" ? info.low : v === "high" ? info.high : void 0;
+        const note = el2("div", "tp-stat-note", hint ? `${hint} Good: ${goodRange(key)}` : `Good: ${goodRange(key)}`);
+        if (hint) note.style.color = THEME.warning;
+        item.append(top, note, el2("div", "tp-stat-note", info.help));
+        list.append(item);
+      }
+      sec.append(list);
+      if (hero.hands < MIN_HANDS_FOR_STYLE) sec.append(el2("div", "tp-muted", `Style shows after ${MIN_HANDS_FOR_STYLE} hands`));
+      return sec;
+    }
+    function netSpan(net, bb) {
+      const color = netColor(net);
+      if (typeof bb !== "number" || !Number.isFinite(bb)) {
+        const d = el2("span", void 0, formatMoney(net));
+        d.style.color = color;
+        return d;
+      }
+      const wrap = el2("span");
+      const main = el2("span", void 0, formatBB(bb));
+      main.style.color = color;
+      const dollars2 = el2("span", "tp-muted", `(${formatMoney(net)})`);
+      dollars2.style.fontSize = "0.85em";
+      wrap.append(main, " ", dollars2);
+      return wrap;
+    }
+    const plural = (n, one, many) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+    const amount = (t) => t.bb === null ? formatMoney(t.net) : formatBB(t.bb);
+    function leakSection(report, scope) {
+      const sec = el2("div", "tp-leaks");
+      const line = (spots, text, none, hands) => {
+        const p = el2("div", "tp-leak-line");
+        if (spots === 0) {
+          p.textContent = none;
+          p.classList.add("tp-muted");
+        } else {
+          p.append(`${text(spots.toLocaleString("en-US"))} Those hands: `);
+          const v = el2("b", void 0, amount(hands));
+          v.style.color = netColor(hands.net);
+          p.append(v, ".");
+        }
+        return p;
+      };
+      sec.append(
+        line(
+          report.passedUp.spots,
+          (n) => `You passed up ${n} ${report.passedUp.spots === 1 ? "bet or raise" : "bets or raises"} ${scope}.`,
+          `You did not pass up any bets or raises ${scope}.`,
+          report.passedUp.hands
+        ),
+        line(
+          report.calledFold.spots,
+          () => `You called ${plural(report.calledFold.spots, "time", "times")} when the advice was to fold ${scope}.`,
+          `You did not call against fold advice ${scope}.`,
+          report.calledFold.hands
+        )
+      );
+      if (report.followed.hands > 0) {
+        const p = el2("div", "tp-leak-line");
+        p.append(`Hands where you followed the advice: `);
+        const v = el2("b", void 0, amount(report.followed));
+        v.style.color = netColor(report.followed.net);
+        p.append(v, ".");
+        sec.append(p);
+      }
+      sec.append(el2("div", "tp-hint", "This compares what happened on those hands. It is not the exact amount a choice cost you."));
+      return sec;
+    }
+    const SVG = "http://www.w3.org/2000/svg";
+    function profitChart(curve) {
+      const pts = curve.points;
+      if (pts.length < 3) return null;
+      const W = 250, H = 64, PAD = 4;
+      const lo = Math.min(0, ...pts), hi = Math.max(0, ...pts);
+      const span = hi - lo || 1;
+      const x = (i) => PAD + i / (pts.length - 1) * (W - 2 * PAD);
+      const y = (v) => PAD + (1 - (v - lo) / span) * (H - 2 * PAD);
+      const end = pts[pts.length - 1];
+      const color = netColor(end);
+      const svg = doc.createElementNS(SVG, "svg");
+      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      svg.setAttribute("class", "tp-chart");
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", `Net result after each hand this session, ending at ${curve.unit === "bb" ? formatBB(end) : formatMoney(end)}`);
+      const zero2 = doc.createElementNS(SVG, "line");
+      for (const [k, v] of Object.entries({ x1: PAD, x2: W - PAD, y1: y(0), y2: y(0), stroke: THEME.muted, "stroke-dasharray": "3 3", "stroke-width": 1 })) zero2.setAttribute(k, String(v));
+      const line = doc.createElementNS(SVG, "polyline");
+      line.setAttribute("points", pts.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" "));
+      for (const [k, v] of Object.entries({ fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round" })) line.setAttribute(k, String(v));
+      svg.append(zero2, line);
+      const wrap = el2("div", "tp-chart-wrap");
+      wrap.append(el2("h4", "tp-subhead tp-muted", "This session, hand by hand"), svg);
+      return wrap;
+    }
+    function pastSessions(past) {
+      if (past.length === 0) return null;
+      const sec = el2("div", "tp-past");
+      sec.append(el2("h4", "tp-subhead tp-muted", "Earlier sessions"));
+      for (const p of past) {
+        const item = el2("div", "tp-past-item");
+        const top = el2("div", "tp-kv");
+        top.append(
+          el2("span", void 0, `${new Date(p.start).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} \xB7 ${plural(p.hands, "hand", "hands")}`),
+          netSpan(p.net, p.bb)
+        );
+        const bits = [];
+        if (p.bbPer100 !== null) bits.push(`${formatBB(p.bbPer100)} per 100 hands`);
+        if (p.perHour) bits.push(`${p.perHour.unit === "bb" ? formatBB(p.perHour.value) : formatMoney(Math.round(p.perHour.value))} per hour`);
+        if (p.durationMs > 0) bits.push(`${Math.max(1, Math.round(p.durationMs / 6e4))} min`);
+        if (p.biggestWinBb !== null) bits.push(`biggest win ${formatBB(p.biggestWinBb).replace(/^\+/, "")}`);
+        else if (p.biggestWin > 0) bits.push(`biggest pot won ${p.biggestWin.toLocaleString("en-US")}`);
+        item.append(top);
+        if (bits.length > 0) item.append(el2("div", "tp-hint", bits.join(" \xB7 ")));
+        sec.append(item);
+      }
+      return sec;
+    }
+    const limitsOf = () => ({ stopLoss: ui.stopLoss, winTarget: ui.winTarget });
+    let alertState = { loss: false, win: false };
+    function alertMessage(kind, bb) {
+      const size = formatBB(Math.abs(bb)).replace(/^[+−]/, "");
+      return kind === "stop-loss" ? `You are down ${size} this session, past the stop-loss you set. This could be a good moment to take a break.` : `You are up ${size} this session, past the win target you set. You may want to take that and step away.`;
+    }
+    function checkAlerts(s) {
+      const r = checkLimits(alertState, s.session.bb, limitsOf());
+      alertState = r.state;
+      if (r.fired && s.session.bb !== null) {
+        alertText.textContent = alertMessage(r.fired, s.session.bb);
+        alertEl.style.display = "";
+      }
+    }
+    const openHands = /* @__PURE__ */ new Set();
+    function showResults(s, hero) {
+      try {
+        checkAlerts(s);
+        renderYou(hero);
+        if (s.session.hands > 0) {
+          headNet.replaceChildren(typeof s.session.bb === "number" && Number.isFinite(s.session.bb) ? formatBB(s.session.bb) : formatMoney(s.session.net));
+          headNet.style.color = netColor(s.session.net);
+        } else {
+          headNet.replaceChildren();
+        }
+        render(bodies.results, (box) => {
+          const tally2 = (label, t) => {
+            const row2 = el2("div", "tp-kv");
+            const v = el2("span");
+            v.append(`${t.hands.toLocaleString("en-US")} \xB7 `);
+            v.append(netSpan(t.net, t.bb));
+            row2.append(el2("span", "tp-muted", label), v);
+            return row2;
+          };
+          const netRow = (label, t) => {
+            const row2 = el2("div", "tp-kv");
+            row2.append(el2("span", "tp-muted", label), netSpan(t.net, t.bb));
+            return row2;
+          };
+          box.append(
+            heroSection(hero),
+            netRow("Session net", s.session),
+            netRow("All-time net", s.allTime),
+            kv("Hands", s.allTime.hands.toLocaleString("en-US")),
+            tally2("Followed advice", s.followed),
+            tally2("Ignored advice", s.ignored)
+          );
+          if (s.insights) {
+            const lead = el2("h4", "tp-subhead tp-muted", "Where passive play shows up");
+            lead.style.marginTop = "8px";
+            box.append(lead, leakSection(s.insights.leaks.session, "this session"));
+            if (s.insights.leaks.allTime.followed.hands + s.insights.leaks.allTime.passedUp.spots + s.insights.leaks.allTime.calledFold.spots > 0) {
+              box.append(leakSection(s.insights.leaks.allTime, "overall"));
+            }
+            const chart = profitChart(s.insights.curve);
+            if (chart) box.append(chart);
+            const past = pastSessions(s.insights.past);
+            if (past) box.append(past);
+          }
+          const heading = el2("h4", "tp-subhead tp-muted", "Last 20 hands");
+          heading.style.marginTop = "6px";
+          box.append(heading, el2("div", "tp-legend", "\u2713 followed the advice \xB7 \u2717 went against it \xB7 \u2013 no advice recorded. Click a hand to review it."));
+          for (const hand of s.recent.slice(0, 20)) {
+            const mark = hand.followed === true ? "\u2713" : hand.followed === false ? "\u2717" : "\u2013";
+            const item = el2("div", "tp-hand-item");
+            const row2 = el2("button", "tp-hand-row");
+            row2.type = "button";
+            const open = openHands.has(hand.handId);
+            row2.setAttribute("aria-expanded", String(open));
+            const chevron = el2("span", "tp-hand-chevron", open ? "\u25BE" : "\u25B8");
+            chevron.setAttribute("aria-hidden", "true");
+            const main = el2("span", "tp-hand-main");
+            main.append(chevron, cardsEl(doc, hand.cards));
+            const side = el2("span", "tp-hand-side");
+            const markEl = el2("span", "tp-muted", mark);
+            const meaning = hand.followed === true ? "Followed the advice" : hand.followed === false ? "Went against the advice" : "No advice recorded";
+            markEl.setAttribute("role", "img");
+            markEl.setAttribute("aria-label", meaning);
+            markEl.title = meaning;
+            side.append(netSpan(hand.net, hand.bigBlind ? hand.net / hand.bigBlind : null), markEl);
+            row2.append(main, side);
+            item.append(row2);
+            let review = null;
+            const sync2 = () => {
+              const isOpen = openHands.has(hand.handId);
+              row2.setAttribute("aria-expanded", String(isOpen));
+              chevron.textContent = isOpen ? "\u25BE" : "\u25B8";
+              if (isOpen && !review) {
+                review = buildReviewCard(doc, buildReview(hand));
+                item.append(review);
+              }
+              if (review) review.style.display = isOpen ? "" : "none";
+            };
+            row2.addEventListener("click", guard2("hand review", () => {
+              if (!openHands.delete(hand.handId)) openHands.add(hand.handId);
+              sync2();
+            }));
+            if (open) sync2();
+            box.append(item);
+          }
+        });
+      } catch (e) {
+        warn("showResults failed", e);
+      }
+    }
+    const recBox = el2("input");
+    recBox.type = "checkbox";
+    recBox.addEventListener("change", guard2("toggle recording", () => h.onToggleRecording(recBox.checked)));
+    const recCount = el2("span", "tp-muted", "0 frames");
+    const recLabel = el2("label");
+    recLabel.append(recBox, " Record raw messages ", recCount);
+    const cardsBox = el2("input");
+    cardsBox.type = "checkbox";
+    cardsBox.checked = ui.showCards;
+    cardsBox.addEventListener("change", guard2("toggle profile cards", () => {
+      ui.showCards = cardsBox.checked;
+      applyMin();
+      saveUi(ui);
+    }));
+    const cardsLabel = el2("label");
+    cardsLabel.append(cardsBox, " Show profile cards");
+    const limitInput = (key, label, name) => {
+      const input = el2("input");
+      input.type = "number";
+      input.min = "1";
+      input.step = "1";
+      input.placeholder = "e.g. 50";
+      input.name = key;
+      input.autocomplete = "off";
+      input.inputMode = "numeric";
+      input.style.cssText = "width:72px";
+      input.value = ui[key] === null ? "" : String(ui[key]);
+      const error = el2("div", "tp-field-error");
+      error.setAttribute("role", "alert");
+      error.style.display = "none";
+      input.addEventListener("change", guard2(`set ${key}`, () => {
+        const n = Number(input.value);
+        const typed = input.value.trim() !== "";
+        const valid = typed && Number.isFinite(n) && n > 0;
+        ui[key] = valid ? n : null;
+        input.value = ui[key] === null ? "" : String(ui[key]);
+        input.setAttribute("aria-invalid", String(typed && !valid));
+        error.textContent = typed && !valid ? `${name} is off. Enter a number above 0, or leave the box empty.` : "";
+        error.style.display = typed && !valid ? "" : "none";
+        saveUi(ui);
+      }));
+      const l = el2("label");
+      l.append(`${label} `, input, " big blinds");
+      const wrap = el2("div");
+      wrap.append(l, error);
+      return wrap;
+    };
+    const btn = (text, fn) => {
+      const b = el2("button", "tp-btn", text);
+      b.type = "button";
+      b.addEventListener("click", guard2(text, fn));
+      return b;
+    };
+    const file = el2("input");
+    file.type = "file";
+    file.accept = "application/json";
+    file.style.display = "none";
+    file.addEventListener("change", () => {
+      const f = file.files?.[0];
+      if (!f) return;
+      f.text().then((t) => h.onImportData(t)).catch((e) => {
+        warn("import failed", e);
+        notice("Couldn\u2019t read that file. Pick a .json file exported from this script.");
+      }).finally(() => {
+        try {
+          file.value = "";
+        } catch {
+        }
+      });
+    });
+    const section = (heading, ...kids) => {
+      const d = el2("div", "tp-section");
+      d.append(el2("h3", "tp-section-title", heading), ...kids.filter((k) => k !== null));
+      return d;
+    };
+    const row = (...kids) => {
+      const d = el2("div");
+      d.append(...kids);
+      return d;
+    };
+    const noticeEl = el2("div", "tp-muted tp-notice");
+    noticeEl.style.display = "none";
+    noticeEl.setAttribute("role", "status");
+    noticeEl.setAttribute("aria-live", "polite");
+    const posRow = row(btn("Reset Position", () => {
+      ui.left = ui.top = null;
+      root.style.left = root.style.top = root.style.right = "";
+      clamp();
+      saveUi(ui);
+    }));
+    const posSection = section("Position", el2("div", "tp-hint", "Drag the title bar to move the panel. Reset Position puts it back at the right edge."), posRow);
+    const resetBtn = btn("Reset All Profiles", () => {
+      if (confirm("Reset all opponent profiles?")) h.onResetProfiles();
+    });
+    resetBtn.classList.add("tp-danger");
+    bodies.settings.append(
+      section(
+        "Display",
+        cardsLabel,
+        el2("div", "tp-hint", "Optional session notes. A gentle message appears once when your session result passes a number, counted in big blinds. Leave empty to turn off."),
+        limitInput("stopLoss", "Stop-loss, down by", "Stop-loss"),
+        limitInput("winTarget", "Win target, up by", "Win target")
+      ),
+      posSection,
+      section(
+        "Your data",
+        el2("div", "tp-hint", "Back up or move your player profiles and results."),
+        row(btn("Export Data", () => h.onExportData()), btn("Import Data", () => file.click()), file),
+        noticeEl,
+        row(resetBtn)
+      ),
+      section("Debugging", recLabel, row(btn("Export Capture", () => h.onExportCapture())))
+    );
+    function setRecording(on, frames) {
+      try {
+        recBox.checked = on;
+        recCount.textContent = `${frames.toLocaleString("en-US")} frames`;
+      } catch (e) {
+        warn("setRecording failed", e);
+      }
+    }
+    function notice(text) {
+      try {
+        noticeEl.textContent = text;
+        noticeEl.style.display = text ? "" : "none";
+      } catch (e) {
+        warn("notice failed", e);
+      }
+    }
+    const applyHidden = () => {
+      root.style.display = ui.hidden && docked ? "none" : "";
+      posSection.style.display = docked ? "none" : "";
+    };
+    function dockInto(anchor) {
+      try {
+        if (anchor) {
+          if (!root.isConnected || root.previousElementSibling !== anchor) anchor.after(root);
+          if (!docked) {
+            docked = true;
+            root.classList.add("tp-docked");
+            root.style.left = root.style.top = root.style.right = "";
+            applyHidden();
+          }
+        } else if (docked || !root.isConnected) {
+          docked = false;
+          root.classList.remove("tp-docked");
+          doc.body.appendChild(root);
+          applyHidden();
+          clamp();
+        }
+      } catch (e) {
+        warn("dock failed", e);
+      }
+    }
+    function toggleVisible() {
+      ui.hidden = !ui.hidden;
+      applyHidden();
+      saveUi(ui);
+      if (!ui.hidden) clamp();
+      return !ui.hidden;
+    }
+    mounted.set(doc, () => {
+      endDrag?.();
+      win?.removeEventListener("resize", onResize);
+      win?.removeEventListener("blur", onBlur);
+      root.remove();
+      style.remove();
+      doc.body.classList.remove(CARDS_HIDDEN);
+    });
+    setStatus("not-seated");
+    showTab("advice");
+    applyMin();
+    applyHidden();
+    doc.head.appendChild(style);
+    doc.body.appendChild(root);
+    clamp();
+    return { setStatus, showAdvice, showResults, showReview, setRecording, notice, reminder, dockInto, toggleVisible, isVisible: () => !ui.hidden };
+  }
+
   // src/profiles/labels.ts
   var LABELS = {
     fish: { name: "Fish", colour: "#1e9e6a", help: "Weak player who loses money. Target them." },
@@ -410,99 +1987,6 @@
   };
   var LABEL_KEYS = Object.keys(LABELS);
   var isLabel = (v) => typeof v === "string" && Object.hasOwn(LABELS, v);
-
-  // src/ui/theme.ts
-  var THEME = {
-    bg: "#1b1b1b",
-    text: "#eee",
-    muted: "#999",
-    good: "#5fd35f",
-    warning: "#f0a030",
-    bad: "#e05050",
-    draw: "#5aa9e6",
-    line: "#333",
-    zIndex: "2147483000"
-  };
-  var PANEL_WIDTH = 280;
-  var PANEL_CSS = `
-#tp-advisor{position:fixed;right:16px;top:120px;width:${PANEL_WIDTH}px;z-index:${THEME.zIndex};background:${THEME.bg};color:${THEME.text};font:13px/1.45 sans-serif;border:1px solid #333;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.55);box-sizing:border-box}
-#tp-advisor *{box-sizing:border-box}
-#tp-advisor{text-align:left}
-#tp-advisor.tp-docked{position:relative;left:auto;top:auto;right:auto;width:100%;margin:0;z-index:auto;box-shadow:none;border:0;border-top:1px solid rgba(255,255,255,.08);border-radius:0;background:rgba(0,0,0,.45);font-size:12px}
-#tp-advisor.tp-docked .tp-head{cursor:default;padding:5px 10px;font:14px 'Fjalla One',sans-serif;letter-spacing:.4px;text-transform:uppercase;border-bottom-color:rgba(255,255,255,.08)}
-#tp-advisor.tp-docked .tp-grip{display:none}
-#tp-advisor.tp-docked .tp-tabs{border-bottom-color:rgba(255,255,255,.08)}
-#tp-advisor.tp-docked .tp-tab{padding:5px 0;font:13px 'Fjalla One',sans-serif;letter-spacing:.4px;text-transform:uppercase}
-#tp-advisor.tp-docked .tp-body{padding:8px 10px}
-#tp-advisor.tp-docked .tp-kv{border-bottom-color:rgba(255,255,255,.06)}
-/* the advice line above Torn's buttons already shows the action and equity */
-#tp-advisor.tp-docked .tp-big,#tp-advisor.tp-docked .tp-preview-label,#tp-advisor.tp-docked .tp-turn-label,#tp-advisor.tp-docked .tp-eq-line,#tp-advisor.tp-docked .tp-eq,#tp-advisor.tp-docked .tp-meters{display:none}
-#tp-advisor .tp-head{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 10px;cursor:move;user-select:none;border-bottom:1px solid ${THEME.line};font-weight:600}
-#tp-advisor .tp-title{flex:1;white-space:nowrap}
-#tp-advisor .tp-head-net{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
-#tp-advisor .tp-min{background:none;border:0;color:${THEME.text};cursor:pointer;font:14px sans-serif;padding:0 4px}
-#tp-advisor .tp-tabs{display:flex;border-bottom:1px solid ${THEME.line}}
-#tp-advisor .tp-tab{flex:1;background:none;border:0;color:${THEME.muted};cursor:pointer;padding:7px 0;font:13px sans-serif}
-#tp-advisor .tp-tab[aria-selected="true"]{color:${THEME.text};border-bottom:2px solid ${THEME.text}}
-#tp-advisor .tp-body{padding:10px}
-#tp-advisor .tp-big{font:800 22px sans-serif;margin:0 0 8px;padding:8px 10px;border-radius:6px;border-left:4px solid currentColor;background:rgba(255,255,255,.04);letter-spacing:.3px}
-#tp-advisor .tp-preview-label,#tp-advisor .tp-turn-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-#tp-advisor .tp-preview-label{color:${THEME.muted}}
-#tp-advisor .tp-preview-label::after{content:' \xB7 updates as players act';text-transform:none;letter-spacing:0}
-#tp-advisor .tp-turn-label{color:${THEME.warning};font-weight:700}
-#tp-advisor .tp-big-preview{opacity:.75;border-left-style:dashed;font-size:18px}
-:is(#tp-advisor,#tp-hud-row) .tp-bet{margin:0 0 10px;padding:8px 10px;border:1px solid #333;border-radius:6px;background:#202020}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-head{display:flex;justify-content:space-between;align-items:baseline}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-title{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:${THEME.muted}}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-value{font:800 18px sans-serif;font-variant-numeric:tabular-nums}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-sub{font-size:11px;color:${THEME.muted};text-align:right;margin-bottom:4px;font-variant-numeric:tabular-nums}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-track{position:relative;margin:4px 0 8px}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-range{width:100%;margin:0;accent-color:${THEME.good};cursor:pointer}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-tick{position:absolute;top:-4px;width:2px;height:6px;margin-left:-1px;background:${THEME.warning};pointer-events:none}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-quick{display:flex;flex-wrap:wrap}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-quick button.tp-btn{padding:3px 7px;margin:0 4px 4px 0;font-size:11px}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-quick button.tp-btn.tp-bet-advised{color:${THEME.warning}!important;border-color:rgba(240,160,48,.5)!important}
-:is(#tp-advisor,#tp-hud-row) .tp-bet-note{font-size:10px;color:${THEME.muted}}
-:is(#tp-advisor,#tp-hud-row) .tp-meters{display:grid;gap:4px;margin:6px 0}
-:is(#tp-advisor,#tp-hud-row) .tp-meter{display:grid;grid-template-columns:44px 110px 1fr;align-items:center;gap:8px;cursor:help}
-:is(#tp-advisor,#tp-hud-row) .tp-meter-label{font:13px 'Fjalla One',sans-serif;letter-spacing:.4px;text-transform:uppercase;color:#aaa}
-:is(#tp-advisor,#tp-hud-row) .tp-meter-bar{position:relative;height:8px;border-radius:4px;background:#1a1a1a;border:1px solid #111;box-shadow:inset 0 1px 3px rgba(0,0,0,.9);overflow:visible}
-:is(#tp-advisor,#tp-hud-row) .tp-meter-fill{height:100%;border-radius:4px}
-:is(#tp-advisor,#tp-hud-row) .tp-meter-mark{position:absolute;top:-3px;width:2px;height:12px;margin-left:-1px;background:#fff;opacity:.7}
-:is(#tp-advisor,#tp-hud-row) .tp-meter-text{font-size:12px;color:#ddd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#tp-advisor .tp-eq{height:8px;background:${THEME.line};border-radius:3px;margin:3px 0 6px}
-#tp-advisor .tp-eq>div{height:100%;background:${THEME.good};border-radius:3px}
-#tp-advisor .tp-kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #252525}
-#tp-advisor .tp-kv>span:last-child{text-align:right;font-variant-numeric:tabular-nums}
-#tp-advisor .tp-muted{color:${THEME.muted}}
-#tp-advisor .tp-chip{display:inline-block;margin-top:6px;padding:1px 8px;border-radius:9px;border:1px solid currentColor;font-size:11px}
-:is(#tp-advisor,#tp-hud-row) button.tp-btn{margin:0 6px 6px 0;padding:5px 10px;cursor:pointer;font:600 12px sans-serif;color:${THEME.text}!important;background:#2c2c2c!important;border:1px solid #4a4a4a!important;border-radius:5px;text-shadow:none;box-shadow:none;height:auto;line-height:1.2}
-:is(#tp-advisor,#tp-hud-row) button.tp-btn:hover{background:#383838!important;border-color:#666!important}
-:is(#tp-advisor,#tp-hud-row) button.tp-btn.tp-danger{color:${THEME.bad}!important;border-color:rgba(224,80,80,.5)!important}
-:is(#tp-advisor,#tp-hud-row) button.tp-btn.tp-danger:hover{background:rgba(224,80,80,.12)!important}
-#tp-advisor .tp-style-about{font-size:12px;margin:2px 0 8px}
-#tp-advisor .tp-stats{margin:4px 0 10px}
-#tp-advisor .tp-stat-row{padding:4px 0;border-bottom:1px solid #252525;cursor:help}
-#tp-advisor .tp-stat-row .tp-kv{border:0;padding:0}
-#tp-advisor .tp-abbr{color:${THEME.muted};font-size:10px}
-#tp-advisor .tp-stat-note{font-size:11px;color:${THEME.muted};line-height:1.3}
-#tp-advisor .tp-section{margin-bottom:12px}
-#tp-advisor .tp-section:last-child{margin-bottom:0}
-#tp-advisor .tp-section-title{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:${THEME.muted};margin-bottom:6px}
-#tp-advisor .tp-hint{font-size:11px;color:${THEME.muted};margin:-2px 0 6px}
-#tp-advisor label{display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px}
-#tp-advisor .tp-alert{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:7px 10px;font-size:12px;color:${THEME.warning};background:rgba(240,160,48,.1);border-bottom:1px solid rgba(240,160,48,.35)}
-#tp-advisor .tp-alert-close{background:none;border:0;color:inherit;cursor:pointer;font:16px/1 sans-serif;padding:0 2px}
-#tp-advisor .tp-leaks{margin:4px 0 8px}
-#tp-advisor .tp-leak-line{font-size:12px;margin-bottom:3px}
-#tp-advisor .tp-chart-wrap{margin:8px 0}
-#tp-advisor .tp-chart{display:block;width:100%;height:auto;margin-top:2px;background:rgba(255,255,255,.03);border-radius:4px}
-#tp-advisor .tp-past{margin:8px 0}
-#tp-advisor .tp-past-item{padding:3px 0;border-bottom:1px solid #252525}
-#tp-advisor .tp-past-item .tp-kv{border:0;padding:0}
-#tp-advisor .tp-past-item .tp-hint{margin:0}
-#tp-advisor ul{margin:4px 0 0;padding-left:16px}
-`;
 
   // src/core/preflop-order.ts
   var PREFLOP_ORDER = [
@@ -809,127 +2293,33 @@
     return wrap;
   }
 
-  // src/ui/glossary.ts
-  var STATS = {
-    vpip: {
-      label: "Hands played",
-      abbr: "VPIP",
-      help: "How often you put money in before the flop by choice (blinds don't count).",
-      good: [18, 28],
-      low: "Very tight: you can open up a little.",
-      high: "Playing too many hands."
-    },
-    pfr: {
-      label: "Raised before the flop",
-      abbr: "PFR",
-      help: "How often you raise before the flop.",
-      good: [14, 22],
-      low: "Raise more of the hands you play instead of calling.",
-      high: "Raising a lot: make sure the hands back it up."
-    },
-    threeBet: {
-      label: "Re-raised a raise",
-      abbr: "3-bet",
-      help: "When someone raised before you, how often you raised again.",
-      good: [5, 10],
-      low: "Re-raise your best hands rather than calling.",
-      high: "Re-raising a lot: good players will push back."
-    },
-    af: {
-      label: "Aggression",
-      abbr: "AF",
-      ratio: true,
-      help: "After the flop: bets and raises for every call. Below 1.5 is passive.",
-      good: [2, 4],
-      low: "Passive: bet and raise more, call less.",
-      high: "Very aggressive: pick your bluffs."
-    },
-    foldToRaise: {
-      label: "Folded when raised",
-      abbr: "Fold to raise",
-      help: "When someone raised you, how often you folded.",
-      good: [35, 60],
-      low: "Hard to push off a hand: fold more weak hands to raises.",
-      high: "Easy to push around: players can bluff you off hands."
-    },
-    cbet: {
-      label: "Bets flop after raising",
-      abbr: "Continuation bet",
-      help: "After you raised before the flop, how often you bet the flop when nobody bet before you.",
-      good: [50, 70],
-      low: "Giving up too often after raising: bet the flop more when checked to.",
-      high: "Betting the flop every time: check your weak hands sometimes."
-    },
-    foldToCbet: {
-      label: "Folds to follow-up bet",
-      abbr: "Fold to continuation bet",
-      help: "When the player who raised before the flop bets the flop, how often you fold.",
-      good: [35, 55],
-      low: "Hard to push off a hand: fold more weak hands to a flop bet.",
-      high: "Easy to bluff: players bet the flop knowing you will fold."
-    },
-    wtsd: {
-      label: "Went to showdown",
-      abbr: "WTSD",
-      help: "Of the hands where you saw the flop, how often you got to the end.",
-      good: [24, 33],
-      low: "Giving up often after the flop.",
-      high: "Calling down too much: fold more by the river."
-    }
-  };
-  function verdict(key, value) {
-    const g = STATS[key].good;
-    if (value === null || !g) return "unknown";
-    return value < g[0] ? "low" : value > g[1] ? "high" : "good";
-  }
-  function formatStat(key, value) {
-    if (value === null) return "\u2013";
-    return STATS[key].ratio ? value.toFixed(1) : `${Math.round(value)}%`;
-  }
-  function goodRange(key) {
-    const g = STATS[key].good;
-    if (!g) return "";
-    return STATS[key].ratio ? `${g[0]}\u2013${g[1]}` : `${g[0]}\u2013${g[1]}%`;
-  }
-  var STYLES = {
-    "Tight-Aggressive": { short: "Solid", about: "Plays few hands and bets them hard. The style that wins." },
-    Aggro: { short: "Aggro", about: "Plays lots of hands and raises often." },
-    Maniac: { short: "Maniac", about: "Bets and raises with almost anything." },
-    "Calling station": { short: "Caller", about: "Plays lots of hands and calls rather than raises." },
-    Rock: { short: "Rock", about: "Plays very few hands and rarely raises without a big one." },
-    Unknown: { short: "Learning", about: "Not enough hands seen to judge yet." }
-  };
-
   // src/ui/profile-cards.ts
   var CARD_WIDTH = 250;
   var TAG_HEIGHT = 18;
   var CARDS_ID = "tp-cards";
   var STYLE_ID = "tp-cards-style";
-  var BADGE = {
-    Aggro: "#c0392b",
-    Maniac: "#e67e22",
-    "Calling station": "#8e44ad",
-    Rock: "#7f8c8d",
-    "Tight-Aggressive": "#2980b9",
-    Unknown: "#555"
-  };
   var CARDS_CSS = `
+#${CARDS_ID}{color-scheme:dark}
 #${CARDS_ID} .tp-card{position:absolute;z-index:2147482999;height:${TAG_HEIGHT}px}
 #${CARDS_ID} .tp-card:hover,#${CARDS_ID} .tp-card.tp-open{z-index:2147483000}
 #${CARDS_ID} .tp-card *{box-sizing:border-box}
-#${CARDS_ID} .tp-tag{display:flex;align-items:center;gap:5px;height:${TAG_HEIGHT}px;padding:0 5px;color:#fff;font:11px/${TAG_HEIGHT}px sans-serif;white-space:nowrap;overflow:hidden;cursor:pointer;border-radius:4px 4px 0 0}
+#${CARDS_ID} .tp-tag{appearance:none;display:flex;align-items:center;gap:5px;width:100%;height:${TAG_HEIGHT}px;margin:0;border:0;padding:0 5px;color:#fff;font:11px/${TAG_HEIGHT}px sans-serif;text-align:left;white-space:nowrap;overflow:hidden;cursor:pointer;border-radius:4px 4px 0 0}
+#${CARDS_ID} .tp-card.tp-open .tp-tag{box-shadow:inset 0 0 0 2px #fff}
+#${CARDS_ID} .tp-card.tp-open .tp-pop{border-color:#fff}
 #${CARDS_ID} .tp-card.tp-below .tp-tag{border-radius:0 0 4px 4px}
-#${CARDS_ID} .tp-tag.tp-low{opacity:.7}
+#${CARDS_ID} .tp-tag.tp-low{outline:1px dashed rgba(255,255,255,.7);outline-offset:-3px}
 #${CARDS_ID} .tp-tag-style{font-weight:700;letter-spacing:.3px}
 #${CARDS_ID} .tp-tag-rates{font-variant-numeric:tabular-nums}
-#${CARDS_ID} .tp-tag-hands{margin-left:auto;opacity:.8;font-size:10px;overflow:hidden;text-overflow:ellipsis}
+#${CARDS_ID} .tp-tag-hands{margin-left:auto;font-size:11px;overflow:hidden;text-overflow:ellipsis}
 #${CARDS_ID} .tp-tag-sep{opacity:.5}
-#${CARDS_ID} .tp-tag-label{flex:none;padding:0 5px;border-radius:3px;font-size:10px;font-weight:700;line-height:14px;background:rgba(0,0,0,.35);border-left:4px solid var(--tp-label,#fff)}
+#${CARDS_ID} .tp-tag-label{flex:none;padding:0 5px;border-radius:3px;font-size:11px;font-weight:700;line-height:14px;background:rgba(0,0,0,.35);border-left:4px solid var(--tp-label,#fff)}
 #${CARDS_ID} .tp-labels{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 4px}
-#${CARDS_ID} .tp-label-btn{padding:1px 7px;border-radius:3px;border:1px solid #555;background:#262626;color:#ddd;font:11px sans-serif;cursor:pointer}
-#${CARDS_ID} .tp-label-btn.tp-on{color:#fff;border-color:#fff}
+#${CARDS_ID} .tp-label-btn{min-height:${MIN_TARGET}px;padding:3px 8px;border-radius:3px;border:1px solid #555;background:#262626;color:#ddd;font:12px sans-serif;cursor:pointer}
+#${CARDS_ID} .tp-label-btn:hover{background:#333;border-color:#888}
+#${CARDS_ID} .tp-label-btn[aria-pressed="true"]{background:#3a3a3a;color:#fff;border:2px solid var(--tp-label,#fff);padding:2px 7px}
 #${CARDS_ID} .tp-note{display:block;width:100%;min-height:42px;resize:vertical;margin:4px 0 0;padding:5px 6px;background:#1c1c1c;color:#eee;border:1px solid #444;border-radius:4px;font:12px/1.4 sans-serif}
-#${CARDS_ID} .tp-note-help{color:#777;font-size:10px;margin:2px 0 6px}
+#${CARDS_ID} .tp-note-help{color:${THEME.subtle};font-size:11px;margin:2px 0 6px}
+#${CARDS_ID} .tp-note-help.tp-bad{color:#ff8a8a}
 #${CARDS_ID} .tp-sec{color:#aaa;font-size:11px;margin:8px 0 3px}
 #${CARDS_ID} .tp-sd{padding:4px 0;border-top:1px solid #333}
 #${CARDS_ID} .tp-sd-cards{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
@@ -942,24 +2332,28 @@
 #${CARDS_ID} .tp-card.tp-flip .tp-pop{left:auto;right:0}
 #${CARDS_ID} .tp-card.tp-above .tp-pop{top:100%}
 #${CARDS_ID} .tp-card.tp-below .tp-pop{bottom:100%}
-#${CARDS_ID} .tp-pop{max-height:70vh;overflow-y:auto}
-#${CARDS_ID} .tp-card:hover .tp-pop,#${CARDS_ID} .tp-card.tp-open .tp-pop,#${CARDS_ID} .tp-card:focus-within .tp-pop{display:block}
+#${CARDS_ID} .tp-pop{max-height:70vh;overflow-y:auto;overscroll-behavior:contain}
+#${CARDS_ID} .tp-card:hover .tp-pop,#${CARDS_ID} .tp-card.tp-open .tp-pop{display:block}
+#${CARDS_ID} .tp-pop-close{display:none;float:right;min-width:${MIN_TARGET}px;min-height:${MIN_TARGET}px;margin:-4px -4px 0 4px;border:0;border-radius:4px;background:none;color:#ddd;font:16px/1 sans-serif;cursor:pointer}
+#${CARDS_ID} .tp-pop-close:hover{background:rgba(255,255,255,.12)}
+#${CARDS_ID} .tp-card.tp-open .tp-pop-close{display:block}
 #${CARDS_ID} .tp-card-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 6px;margin-bottom:4px}
 #${CARDS_ID} .tp-card-name{font-weight:700;font-size:13px;overflow-wrap:anywhere}
-#${CARDS_ID} .tp-badge{flex:none;padding:1px 6px;border-radius:3px;color:#fff;font-size:10px;font-weight:700;text-transform:uppercase}
+#${CARDS_ID} .tp-badge{flex:none;padding:1px 6px;border-radius:3px;color:#fff;font-size:11px;font-weight:700;text-transform:uppercase}
 #${CARDS_ID} .tp-card-about{color:#aaa;font-size:11px;margin:-2px 0 6px}
 #${CARDS_ID} .tp-card-stats{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:0 0 8px}
-#${CARDS_ID} .tp-stat{display:flex;align-items:baseline;justify-content:space-between;gap:6px;background:#262626;border-radius:4px;padding:5px 8px;cursor:help}
+#${CARDS_ID} .tp-stat{display:flex;align-items:baseline;justify-content:space-between;gap:6px;background:#262626;border-radius:4px;padding:5px 8px}
 #${CARDS_ID} .tp-stat b{font-size:14px;color:#fff;font-variant-numeric:tabular-nums;white-space:nowrap}
 #${CARDS_ID} .tp-stat span{font-size:11px;color:#aaa;white-space:nowrap}
 #${CARDS_ID} .tp-card-tip{color:#f0c060;padding:5px 6px;background:rgba(240,192,96,.08);border-left:2px solid #f0c060;border-radius:2px}
-#${CARDS_ID} .tp-card-foot{display:flex;justify-content:space-between;gap:4px;color:#777;margin-top:3px}
-#${CARDS_ID} .tp-card-reset{background:none;border:0;padding:0;color:#5aa0e0;cursor:pointer;font:inherit}
+#${CARDS_ID} .tp-card-foot{display:flex;justify-content:space-between;align-items:center;gap:4px;color:${THEME.subtle};font-size:12px;margin-top:3px}
+#${CARDS_ID} .tp-card-reset{min-height:${MIN_TARGET}px;padding:2px 6px;border:0;border-radius:4px;background:none;color:${THEME.link};cursor:pointer;font:inherit}
+#${CARDS_ID} .tp-card-reset:hover{background:rgba(90,160,224,.15);text-decoration:underline}
 #${CARDS_ID} .tp-stat.tp-stat-wrap{flex-wrap:wrap}
 #${CARDS_ID} .tp-stat.tp-stat-wrap span{white-space:normal}
 #${CARDS_ID} .tp-stat .tp-stat-n{flex-basis:100%;white-space:normal;font-variant-numeric:tabular-nums}
 ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
-`;
+${SHARED_CSS}${FOCUS_CSS}`;
   var states = /* @__PURE__ */ new WeakMap();
   var signatures = /* @__PURE__ */ new WeakMap();
   var rangeIds = /* @__PURE__ */ new WeakMap();
@@ -969,7 +2363,15 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
     if (id === void 0) rangeIds.set(r, id = nextRangeId++);
     return id;
   }
-  function warn(what, e) {
+  function closeCards(doc, refocus) {
+    for (const card of Array.from(doc.querySelectorAll(`#${CARDS_ID} .tp-card.tp-open`))) {
+      const tag2 = card.querySelector(".tp-tag");
+      if (refocus && card.contains(doc.activeElement)) tag2?.focus();
+      card.classList.remove("tp-open");
+      tag2?.setAttribute("aria-expanded", "false");
+    }
+  }
+  function warn2(what, e) {
     console.warn(`[torn-poker] ${what}`, e);
   }
   function container(doc) {
@@ -1004,9 +2406,11 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
     const head = el2("div", "tp-card-head");
     head.append(el2("span", "tp-card-name", p.name), badge);
     const about = el2("div", "tp-card-about", STYLES[style].about);
+    const helps = [];
     const stat = (label2, value, help) => {
       const c = el2("div", "tp-stat");
       c.title = help;
+      helps.push([label2, help.slice(help.indexOf(":") + 2)]);
       c.append(el2("span", void 0, label2), " ", el2("b", void 0, value));
       return c;
     };
@@ -1024,23 +2428,47 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
     };
     stats.append(street("cbet", s?.cbet), street("foldToCbet", s?.foldToCbet));
     const tip = el2("div", "tp-card-tip", r ? tipFor(style, r) : "No hands seen yet.");
-    const reset = el2("button", "tp-card-reset", "\u21BB reset");
+    const reset = el2("button", "tp-card-reset");
     reset.type = "button";
+    const resetIcon = el2("span", void 0, "\u21BB");
+    resetIcon.setAttribute("aria-hidden", "true");
+    reset.append(resetIcon, " Reset Profile");
     reset.addEventListener("click", () => {
       try {
         if (confirm(`Reset profile for ${p.name}?`)) st.h.onReset(p.userID);
       } catch (e) {
-        warn("reset failed", e);
+        warn2("reset failed", e);
       }
     });
     const foot = el2("div", "tp-card-foot");
     foot.append(el2("span", void 0, `${hands} ${hands === 1 ? "hand" : "hands"}${early ? " \xB7 early read" : ""}`), reset);
     const pop = el2("div", "tp-pop");
-    pop.append(head, about, stats, rangeGrid(doc, p.liveRange ?? generalRange(s), p.liveRange !== void 0), tip, labelPicker(doc, p), noteBox(doc, p));
+    pop.id = `tp-pop-${p.userID}`;
+    pop.setAttribute("role", "group");
+    pop.setAttribute("aria-label", `${p.name} profile`);
+    const close = el2("button", "tp-pop-close", "\xD7");
+    close.type = "button";
+    close.title = "Close profile";
+    close.setAttribute("aria-label", "Close profile");
+    close.addEventListener("click", () => closeCards(doc, true));
+    pop.append(
+      close,
+      head,
+      about,
+      stats,
+      helpList(doc, "What these numbers mean", helps),
+      rangeGrid(doc, p.liveRange ?? generalRange(s), p.liveRange !== void 0),
+      tip,
+      labelPicker(doc, p),
+      noteBox(doc, p)
+    );
     const shows = showdownList(doc, s?.showdowns ?? []);
     if (shows) pop.append(shows);
     pop.append(foot);
-    const tag2 = el2("div", "tp-tag");
+    const tag2 = el2("button", "tp-tag");
+    tag2.type = "button";
+    tag2.setAttribute("aria-controls", pop.id);
+    tag2.setAttribute("aria-expanded", String(wrap.classList.contains("tp-open")));
     const sep = () => el2("span", "tp-tag-sep", " \xB7 ");
     const handsText = `${hands} ${hands === 1 ? "hand" : "hands"}`;
     const label = s?.label;
@@ -1055,17 +2483,22 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
       tag2.append(el2("span", "tp-tag-style", STYLES[style].short), sep(), el2("span", "tp-tag-rates", plays));
       if (early) tag2.append(sep(), el2("span", "tp-tag-hands", "early read"));
       tag2.title = `${p.name}: ${STYLES[style].about} Plays ${Math.round(r.vpip)}% of hands, raises ${formatStat("pfr", r.pfr)} before the flop, over ${handsText}.${early ? " Early read: more hands will sharpen it." : ""}${note} Click for profile.`;
+      tag2.setAttribute("aria-label", tag2.title.replace(" Click for profile.", " Opens the profile."));
     } else {
       tag2.append(el2("span", "tp-tag-style", STYLES.Unknown.short), sep(), el2("span", "tp-tag-hands", "no hands yet"));
       tag2.title = `${p.name}: no hands seen yet.${note} Click for profile.`;
+      tag2.setAttribute("aria-label", tag2.title.replace(" Click for profile.", " Opens the profile."));
     }
     tag2.classList.toggle("tp-low", early);
     tag2.style.background = BADGE[style];
     tag2.addEventListener("click", () => {
       try {
-        wrap.classList.toggle("tp-open");
+        const open = !wrap.classList.contains("tp-open");
+        closeCards(doc, false);
+        if (open) wrap.classList.add("tp-open");
+        tag2.setAttribute("aria-expanded", String(open));
       } catch (e) {
-        warn("toggle failed", e);
+        warn2("toggle failed", e);
       }
     });
     return [tag2, pop];
@@ -1087,15 +2520,13 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
       b.className = "tp-label-btn";
       b.textContent = key ? LABELS[key].name : "None";
       if (key) b.title = LABELS[key].help;
-      if (key === current) {
-        b.classList.add("tp-on");
-        if (key) b.style.background = LABELS[key].colour;
-      }
+      b.setAttribute("aria-pressed", String(key === current));
+      if (key === current && key) b.style.setProperty("--tp-label", LABELS[key].colour);
       b.addEventListener("click", () => {
         try {
           p.onLabel(key);
         } catch (e) {
-          warn("label failed", e);
+          warn2("label failed", e);
         }
       });
       return b;
@@ -1109,20 +2540,34 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
     area.className = "tp-note";
     area.rows = 2;
     area.maxLength = 500;
-    area.placeholder = "Your note about this player";
+    area.placeholder = "Your note about this player\u2026";
+    area.name = "note";
+    area.setAttribute("aria-label", "Your note about this player");
     area.value = p.stats?.note ?? "";
     let saved = area.value;
+    const help = doc.createElement("div");
+    help.className = "tp-note-help";
+    help.textContent = "Press Enter to save.";
+    help.setAttribute("aria-live", "polite");
     const save = () => {
       const text = area.value.trim();
       if (text === saved) return;
-      saved = text;
       try {
         p.onNote(text);
+        saved = text;
+        help.classList.remove("tp-bad");
+        help.textContent = "Saved.";
       } catch (e) {
-        warn("note failed", e);
+        warn2("note failed", e);
+        help.classList.add("tp-bad");
+        help.textContent = "Couldn\u2019t save the note. Press Enter to try again.";
       }
     };
     area.addEventListener("blur", save);
+    area.addEventListener("input", () => {
+      help.classList.remove("tp-bad");
+      help.textContent = "Press Enter to save.";
+    });
     area.addEventListener("keydown", (ev) => {
       ev.stopPropagation();
       if (ev.key === "Enter" && !ev.shiftKey) {
@@ -1130,9 +2575,6 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
         area.blur();
       }
     });
-    const help = doc.createElement("div");
-    help.className = "tp-note-help";
-    help.textContent = "Press Enter to save.";
     box.append(area, help);
     return box;
   }
@@ -1250,7 +2692,7 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
       try {
         sync(doc, st);
       } catch (e) {
-        warn("card reposition failed", e);
+        warn2("card reposition failed", e);
       }
     };
     const schedule = () => {
@@ -1260,6 +2702,13 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
     };
     win.addEventListener("resize", schedule);
     win.addEventListener("scroll", schedule, true);
+    doc.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeCards(doc, true);
+    }, true);
+    doc.addEventListener("click", (e) => {
+      const target = e.target;
+      if (!target?.closest?.(`#${CARDS_ID} .tp-card.tp-open`)) closeCards(doc, false);
+    });
   }
   function renderProfileCards(doc, players, h) {
     try {
@@ -1273,1224 +2722,8 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
       st.h = h;
       sync(doc, st);
     } catch (e) {
-      warn("renderProfileCards failed", e);
+      warn2("renderProfileCards failed", e);
     }
-  }
-
-  // src/ui/bet-slider.ts
-  function potSized(r, fraction) {
-    const top = r.streetBet + r.toCall;
-    return top + fraction * (r.pot + r.toCall);
-  }
-  var el = (doc, tag2, cls, text) => {
-    const e = doc.createElement(tag2);
-    if (cls) e.className = cls;
-    if (text !== void 0) e.textContent = text;
-    return e;
-  };
-  var guard = (what, fn) => (...args) => {
-    try {
-      fn(...args);
-    } catch (e) {
-      console.warn(`[torn-poker] ${what} failed`, e);
-    }
-  };
-  var SET_AMOUNT = "tp-set-amount";
-  function buildBetSlider(doc, a, r, opts = {}) {
-    const wrap = el(doc, "div", "tp-bet");
-    const bb = r.bigBlind > 0 ? r.bigBlind : 1;
-    const step = [bb / 4, bb / 2, bb].find((x) => Number.isInteger(x) && x >= 1) ?? 1;
-    const bound = (x) => Math.min(r.max, Math.max(r.min, x));
-    const snap = (x) => bound(Math.round(x / step) * step);
-    const advised = (a.action === "bet" || a.action === "raise" || a.action === "allin") && a.amount !== null ? bound(a.amount) : null;
-    const head = el(doc, "div", "tp-bet-head");
-    head.append(el(doc, "span", "tp-bet-title", r.kind === "raise" ? "Raise to" : "Bet"));
-    const readout = el(doc, "span", "tp-bet-value");
-    head.append(readout);
-    const sub = el(doc, "div", "tp-bet-sub");
-    const range = el(doc, "input");
-    range.type = "range";
-    range.className = "tp-bet-range";
-    range.min = String(r.min);
-    range.max = String(r.max);
-    range.step = "any";
-    range.setAttribute("aria-label", r.kind === "raise" ? "Raise to" : "Bet amount");
-    range.title = "Fills Torn's bet box. You press Torn's button.";
-    const track = el(doc, "div", "tp-bet-track");
-    track.append(range);
-    if (advised !== null && r.max > r.min) {
-      const tick = el(doc, "div", "tp-bet-tick");
-      tick.title = "Advised";
-      tick.style.left = `${(advised - r.min) / (r.max - r.min) * 100}%`;
-      track.append(tick);
-    }
-    const note = el(doc, "div", "tp-bet-note", "Fills Torn's bet box. You press Torn's button.");
-    const show = (amount) => {
-      const along = r.max > r.min ? (amount - r.min) / (r.max - r.min) * 100 : 100;
-      range.style.setProperty("--tp-fill", `${Math.min(100, Math.max(0, along))}%`);
-      readout.textContent = `${Number((amount / bb).toFixed(2))} BB`;
-      const potPct = r.pot > 0 ? Math.round((amount - r.streetBet - r.toCall) / (r.pot + r.toCall) * 100) : null;
-      sub.textContent = [
-        `$${Math.round(amount).toLocaleString("en-US")}`,
-        amount >= r.max ? "all-in" : potPct !== null ? `${Math.max(0, potPct)}% pot` : "",
-        advised !== null && amount === advised ? "advised" : ""
-      ].filter(Boolean).join(" \xB7 ");
-    };
-    const pick = (amount, exact = false) => {
-      const v = exact ? bound(amount) : snap(amount);
-      range.value = String(v);
-      show(v);
-      const ok = r.onChange(v);
-      note.textContent = ok ? "Filled in Torn's bet box. Press Torn's button to bet." : "Couldn't find Torn's bet box.";
-      note.style.color = ok ? "" : THEME.bad;
-      note.classList.toggle("tp-bet-error", !ok);
-    };
-    wrap.addEventListener(SET_AMOUNT, (e) => {
-      const amount = Number(e.detail);
-      if (!Number.isFinite(amount)) return;
-      range.value = String(bound(amount));
-      show(bound(amount));
-    });
-    range.addEventListener("input", guard("bet slider", () => pick(Number(range.value))));
-    const quick = el(doc, "div", "tp-bet-quick");
-    const chip = (label, amount, exact = false) => {
-      const b = el(doc, "button", "tp-btn", label);
-      b.type = "button";
-      b.addEventListener("click", guard(`bet ${label}`, () => pick(amount, exact)));
-      quick.append(b);
-      return b;
-    };
-    chip("Min", r.min, true);
-    chip("\xBD pot", potSized(r, 0.5));
-    chip("\u2154 pot", potSized(r, 2 / 3));
-    chip("Pot", potSized(r, 1));
-    chip("All-in", r.max, true);
-    if (advised !== null) chip("Advised", advised, true).classList.add("tp-bet-advised");
-    const start = advised ?? r.min;
-    range.value = String(start);
-    show(start);
-    wrap.append(head, sub, track);
-    if (opts.chips !== false) wrap.append(quick);
-    wrap.append(note);
-    return wrap;
-  }
-
-  // src/ui/meters.ts
-  var pct2 = (x) => `${Math.round(x * 100)}%`;
-  var clamp01 = (x) => Math.min(1, Math.max(0, x));
-  function strengthColor(value) {
-    return value >= 0.66 ? THEME.good : value >= 0.33 ? THEME.warning : THEME.bad;
-  }
-  function winColor(equity, potOdds) {
-    if (potOdds !== null) return equity >= potOdds ? THEME.good : THEME.bad;
-    return strengthColor(equity);
-  }
-  function winText(a) {
-    const n = a.opponents;
-    const vs = n === void 0 ? "" : ` vs ${n} ${n === 1 ? "player" : "players"}`;
-    return `${pct2(a.equity)}${vs}${a.potOdds !== null ? ` \xB7 need ${pct2(a.potOdds)}` : ""}`;
-  }
-  function drawText(d) {
-    return `${d.name} \xB7 ${d.outs} ${d.outs === 1 ? "out" : "outs"} \xB7 ${pct2(d.hitChance)} by the river`;
-  }
-  function buildMeters(doc, a) {
-    const el2 = (tag2, cls, text) => {
-      const e = doc.createElement(tag2);
-      if (cls) e.className = cls;
-      if (text !== void 0) e.textContent = text;
-      return e;
-    };
-    const meter = (label, value, color, text, help, mark) => {
-      const row = el2("div", "tp-meter");
-      row.title = help;
-      const bar = el2("div", "tp-meter-bar");
-      const fill = el2("div", "tp-meter-fill");
-      fill.style.width = pct2(clamp01(value));
-      fill.style.background = color;
-      bar.append(fill);
-      if (mark !== void 0) {
-        const tick = el2("div", "tp-meter-mark");
-        tick.style.left = pct2(clamp01(mark));
-        bar.append(tick);
-      }
-      row.append(el2("span", "tp-meter-label", label), bar, el2("span", "tp-meter-text", text));
-      return row;
-    };
-    const box = el2("div", "tp-meters");
-    if (a.strength) {
-      box.append(meter(
-        "Hand",
-        a.strength.value,
-        strengthColor(a.strength.value),
-        `${a.hand} \xB7 ${a.strength.note.toLowerCase()}`,
-        "Hand strength on its own: before the flop, how your two cards rank among all starting hands; after it, how many possible hands you beat right now."
-      ));
-    }
-    if (a.draw) {
-      box.append(meter(
-        "Draw",
-        a.draw.hitChance,
-        THEME.draw,
-        drawText(a.draw),
-        "Cards that would complete your draw, and the chance one arrives by the river. On the flop you may have to pay again on the turn, so the Win line is the better guide to calling."
-      ));
-    }
-    box.append(meter(
-      "Win",
-      a.equity,
-      winColor(a.equity, a.potOdds),
-      winText(a),
-      'Chance of winning the pot against the players still in, given how they play. "Need" is what a call has to win to break even.',
-      a.potOdds ?? void 0
-    ));
-    return box;
-  }
-
-  // src/ui/format.ts
-  function formatMoney(n) {
-    const body = Math.abs(n).toLocaleString("en-US");
-    return n > 0 ? `+${body}` : n < 0 ? `\u2212${body}` : body;
-  }
-  function formatBB(n) {
-    const r = Number(n.toFixed(2));
-    const body = Math.abs(r).toString();
-    return `${r > 0 ? "+" : r < 0 ? "\u2212" : ""}${body} BB`;
-  }
-
-  // src/results/results.ts
-  var KEY = "results";
-  var SAVE_DELAY_MS = 3e4;
-  var MAX_PENDING = 20;
-  var RECENT = 20;
-  var MAX_HANDS = 5e3;
-  var family = (a) => a === "bet" || a === "raise" || a === "allin" ? "aggressive" : a;
-  var num = (v) => typeof v === "number" && Number.isFinite(v);
-  var STREETS = /* @__PURE__ */ new Set(["preflop", "flop", "turn", "river"]);
-  var ACTIONS = /* @__PURE__ */ new Set(["fold", "check", "call", "bet", "raise", "allin"]);
-  function isHeroHand(v) {
-    if (v === null || typeof v !== "object") return false;
-    const h = v;
-    const step = (x) => {
-      if (x === null || typeof x !== "object") return false;
-      const s = x;
-      return STREETS.has(s.street) && ACTIONS.has(s.action);
-    };
-    return typeof h.handId === "string" && (h.tableId === null || num(h.tableId)) && (h.bigBlind === void 0 || num(h.bigBlind) && h.bigBlind > 0) && (h.board === void 0 || Array.isArray(h.board) && h.board.length <= 5 && h.board.every(num)) && num(h.at) && (h.cards === null || Array.isArray(h.cards) && h.cards.length === 2 && h.cards.every(num)) && num(h.invested) && num(h.won) && num(h.net) && (h.followed === null || typeof h.followed === "boolean") && Array.isArray(h.taken) && h.taken.every(step) && Array.isArray(h.advice) && h.advice.every((a) => step(a) && (a.amount === null || num(a.amount)));
-  }
-  function validHands(v) {
-    if (v === null || typeof v !== "object") return null;
-    const o = v;
-    if (o.version !== 1 || !Array.isArray(o.hands)) return null;
-    return o.hands.filter(isHeroHand);
-  }
-  var Results = class {
-    constructor(store2) {
-      this.store = store2;
-      let stored;
-      try {
-        stored = store2.get(KEY);
-      } catch (err) {
-        console.warn("[torn-poker] failed to read results", err);
-      }
-      this.hands = (validHands(stored) ?? []).slice(-MAX_HANDS);
-    }
-    store;
-    hands = [];
-    /** advice per hand, in the order it was given */
-    pending = /* @__PURE__ */ new Map();
-    timer = null;
-    recordAdvice(handId, street, a) {
-      let advice = this.pending.get(handId);
-      if (!advice) {
-        advice = [];
-        this.pending.set(handId, advice);
-        while (this.pending.size > MAX_PENDING) {
-          const oldest = this.pending.keys().next().value;
-          this.pending.delete(oldest);
-        }
-      }
-      advice.push({ street, action: a.action, amount: a.amount });
-    }
-    /** the stored hand, or null when nothing was stored (hero not dealt in, no result, or a repeat) */
-    recordHand(hand) {
-      const pending = this.pending.get(hand.handId);
-      this.pending.delete(hand.handId);
-      if (!hand.dealtIn.some((p) => p.userID === hand.heroId)) return null;
-      if (Object.keys(hand.winnings).length === 0) return null;
-      if (this.hands.some((h) => h.handId === hand.handId)) return null;
-      const advice = pending ?? [];
-      const taken = hand.actions.filter((a) => a.userID === hand.heroId).map((a) => ({ street: a.street, action: a.action }));
-      const seen = /* @__PURE__ */ new Map();
-      const followed = advice.length === 0 ? null : advice.every((a) => {
-        const i = seen.get(a.street) ?? 0;
-        seen.set(a.street, i + 1);
-        const t = taken.filter((x) => x.street === a.street)[i];
-        return t !== void 0 && family(t.action) === family(a.action);
-      });
-      const invested = hand.invested[hand.heroId] ?? 0;
-      const won = hand.winnings[hand.heroId] ?? 0;
-      const stored = {
-        handId: hand.handId,
-        tableId: hand.tableId,
-        ...hand.bigBlind > 0 ? { bigBlind: hand.bigBlind } : {},
-        at: hand.endedAt,
-        cards: hand.heroCards,
-        ...hand.board.length > 0 ? { board: [...hand.board] } : {},
-        invested,
-        won,
-        net: won - invested,
-        advice,
-        taken,
-        followed
-      };
-      this.hands.push(stored);
-      if (this.hands.length > MAX_HANDS) this.hands.splice(0, this.hands.length - MAX_HANDS);
-      if (this.timer === null) this.timer = setTimeout(() => this.flush(), SAVE_DELAY_MS);
-      return stored;
-    }
-    summary(now) {
-      const hs = this.hands;
-      let session = [];
-      const last = hs[hs.length - 1];
-      if (last && now - last.at < SESSION_GAP_MS) {
-        let start = hs.length - 1;
-        while (start > 0 && hs[start].at - hs[start - 1].at < SESSION_GAP_MS) start--;
-        session = hs.slice(start);
-      }
-      return {
-        session: tally(session),
-        allTime: tally(hs),
-        followed: tally(hs.filter((h) => h.followed === true)),
-        ignored: tally(hs.filter((h) => h.followed === false)),
-        recent: hs.slice(-RECENT).reverse(),
-        insights: computeInsights(hs, now)
-      };
-    }
-    flush() {
-      if (this.timer !== null) {
-        clearTimeout(this.timer);
-        this.timer = null;
-      }
-      try {
-        this.store.set(KEY, this.snapshot());
-      } catch (err) {
-        console.warn("[torn-poker] failed to save results", err);
-      }
-    }
-    exportJSON() {
-      return JSON.stringify(this.snapshot(), null, 2);
-    }
-    importJSON(text) {
-      let parsed;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        throw new Error("Not a results export");
-      }
-      const incoming = validHands(parsed);
-      if (!incoming) throw new Error("Not a results export");
-      const known = new Set(this.hands.map((h) => h.handId));
-      const fresh = incoming.filter((h) => !known.has(h.handId));
-      this.hands = [...this.hands, ...fresh].sort((a, b) => a.at - b.at).slice(-MAX_HANDS);
-      this.flush();
-      return fresh.length;
-    }
-    snapshot() {
-      return { version: 1, hands: this.hands };
-    }
-  };
-
-  // src/results/review.ts
-  var STREETS2 = ["preflop", "flop", "turn", "river"];
-  var BOARD_LEN = { preflop: 0, flop: 3, turn: 4, river: 5 };
-  var STREET_NAME = { preflop: "Preflop", flop: "Flop", turn: "Turn", river: "River" };
-  var WHERE = { preflop: "before the flop", flop: "on the flop", turn: "on the turn", river: "on the river" };
-  var DID = { fold: "Folded", check: "Checked", call: "Called", bet: "Bet", raise: "Raised", allin: "Went all in" };
-  var ADVISED = { fold: "Fold", check: "Check", call: "Call", bet: "Bet", raise: "Raise to", allin: "All in" };
-  var TO = { fold: "fold", check: "check", call: "call", bet: "bet", raise: "raise", allin: "go all in" };
-  var NOUN = { fold: "a fold", check: "a check", call: "a call", bet: "a bet", raise: "a raise", allin: "an all-in" };
-  var streetName = (s) => STREET_NAME[s];
-  var dollars = (n) => `$${Math.abs(n).toLocaleString("en-US")}`;
-  function adviceText(action, amount, bigBlind) {
-    if (amount === null) return ADVISED[action];
-    const money = dollars(amount);
-    return bigBlind ? `${ADVISED[action]} ${Number((amount / bigBlind).toFixed(2))} BB (${money})` : `${ADVISED[action]} ${money}`;
-  }
-  function resultPhrase(net, bigBlind) {
-    if (net === 0) return "you broke even";
-    const size = bigBlind ? `${Number((Math.abs(net) / bigBlind).toFixed(2))} BB` : dollars(net);
-    return `you ${net > 0 ? "won" : "lost"} ${size}`;
-  }
-  function takeawayFor(row, net, bigBlind) {
-    const adv = row.advised;
-    const did = row.did;
-    const result = resultPhrase(net, bigBlind);
-    const lead = `You ${DID[did.action].toLowerCase()} ${WHERE[row.street]} when the advice was to ${TO[adv.action]}`;
-    const advFam = family(adv.action);
-    const didFam = family(did.action);
-    if (advFam === "fold") {
-      if (net < 0) return `${lead} \u2014 ${result}; folding might have saved some of that.`;
-      if (net > 0) return `${lead} \u2014 ${result}. It worked out this time, but one win does not make it the better choice.`;
-      return `${lead} \u2014 ${result}.`;
-    }
-    if (didFam === "fold") return `${lead} \u2014 ${result}; staying in might have turned out differently.`;
-    if (advFam === "aggressive") {
-      return net > 0 ? `${lead} \u2014 ${result}; ${NOUN[adv.action]} might have won more.` : `${lead} \u2014 ${result}; ${NOUN[adv.action]} might have turned out differently.`;
-    }
-    if (didFam === "aggressive") {
-      if (net > 0) return `${lead} \u2014 ${result}. It worked out, but it risked more than the advice did.`;
-      if (net < 0) return `${lead} \u2014 ${result}; ${NOUN[adv.action]} would have risked less.`;
-      return `${lead} \u2014 ${result}.`;
-    }
-    return `${lead} \u2014 ${result}.`;
-  }
-  function buildReview(hand) {
-    const board = hand.board ?? [];
-    const bb = hand.bigBlind;
-    const rows = [];
-    for (const street of STREETS2) {
-      const advice = hand.advice.filter((a) => a.street === street);
-      const taken = hand.taken.filter((t) => t.street === street);
-      for (let i = 0; i < Math.max(advice.length, taken.length); i++) {
-        const a = advice[i];
-        const t = taken[i];
-        rows.push({
-          street,
-          again: i > 0,
-          board: board.slice(0, BOARD_LEN[street]),
-          advised: a ? { action: a.action, amount: a.amount, text: adviceText(a.action, a.amount, bb) } : null,
-          did: t ? { action: t.action, text: DID[t.action] } : null,
-          matched: a && t ? family(a.action) === family(t.action) : null
-        });
-      }
-    }
-    const deepest = rows.reduce((n, r) => Math.max(n, r.board.length), 0);
-    const first = rows.find((r) => r.matched === false);
-    return {
-      cards: hand.cards,
-      net: hand.net,
-      netBB: bb ? hand.net / bb : null,
-      resultText: bb ? `${formatBB(hand.net / bb)} (${formatMoney(hand.net)})` : formatMoney(hand.net),
-      rows,
-      runout: board.length > deepest ? board : null,
-      takeaway: first ? takeawayFor(first, hand.net, bb) : null
-    };
-  }
-
-  // src/ui/hand-review.ts
-  var BLUE = THEME.draw;
-  var REVIEW_CSS = `
-#tp-advisor .tp-cards{display:inline-flex;flex-wrap:wrap;gap:5px;vertical-align:baseline}
-#tp-advisor .tp-card{font-weight:700;white-space:nowrap}
-#tp-advisor .tp-card-red{color:${THEME.bad}}
-#tp-advisor .tp-hand-item{border-bottom:1px solid #252525}
-#tp-advisor button.tp-hand-row{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;min-height:28px;margin:0;padding:2px 0;text-align:left;font:inherit;line-height:1.3;cursor:pointer;color:inherit!important;background:none!important;border:0!important;border-radius:3px;text-shadow:none;box-shadow:none;height:auto;font-variant-numeric:tabular-nums}
-#tp-advisor button.tp-hand-row:hover{background:rgba(255,255,255,.05)!important}
-#tp-advisor button.tp-hand-row:focus-visible{outline:2px solid ${BLUE};outline-offset:1px}
-#tp-advisor .tp-hand-main{display:flex;align-items:center;gap:6px}
-#tp-advisor .tp-hand-chevron{display:inline-block;width:10px;color:${THEME.muted};font-size:11px}
-#tp-advisor .tp-hand-side{display:flex;align-items:center;gap:8px;text-align:right}
-#tp-advisor .tp-review{margin:8px 0;padding:8px 10px;border:1px solid #333;border-radius:6px;background:#202020;font-variant-numeric:tabular-nums}
-#tp-advisor .tp-hand-item>.tp-review{margin:4px 0 8px}
-#tp-advisor .tp-review-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
-#tp-advisor .tp-review-title{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:${THEME.muted};margin-bottom:4px}
-#tp-advisor .tp-review-result{font-weight:700}
-#tp-advisor .tp-review-rows{list-style:none;margin:6px 0 0;padding:0}
-#tp-advisor .tp-review-row{padding:5px 0;border-top:1px solid #252525}
-#tp-advisor .tp-review-street{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;font-weight:600}
-#tp-advisor .tp-review-line{display:flex;gap:8px;align-items:baseline}
-#tp-advisor .tp-review-label{flex:0 0 52px;font-size:11px;color:${THEME.muted}}
-#tp-advisor .tp-review-match{margin-left:auto;font-size:11px;font-weight:700;white-space:nowrap}
-#tp-advisor .tp-review-take{margin:8px 0 0;font-size:12px}
-#tp-advisor .tp-review-none{margin:6px 0 0;font-size:12px;color:${THEME.muted}}
-`;
-  var make = (doc, tag2, cls, text) => {
-    const e = doc.createElement(tag2);
-    if (cls) e.className = cls;
-    if (text !== void 0) e.textContent = text;
-    return e;
-  };
-  function cardsEl(doc, cards) {
-    const wrap = make(doc, "span", "tp-cards");
-    if (cards === null || cards.length === 0) {
-      wrap.textContent = "??";
-      return wrap;
-    }
-    for (const c of cards) {
-      const red = suitOf(c) === 1 || suitOf(c) === 2;
-      wrap.append(make(doc, "span", red ? "tp-card tp-card-red" : "tp-card", formatCard(c)));
-    }
-    return wrap;
-  }
-  function buildReviewCard(doc, r, heading) {
-    const card = make(doc, "section", "tp-review");
-    card.setAttribute("aria-label", "Hand review");
-    if (heading) card.append(make(doc, "div", "tp-review-title", heading));
-    const head = make(doc, "div", "tp-review-head");
-    const mine = make(doc, "span");
-    mine.append("Your cards ", cardsEl(doc, r.cards));
-    const result = make(doc, "span", "tp-review-result", r.resultText);
-    result.style.color = r.net > 0 ? THEME.good : r.net < 0 ? THEME.bad : THEME.muted;
-    head.append(mine, result);
-    card.append(head);
-    if (r.rows.length === 0) {
-      card.append(make(doc, "div", "tp-review-none", "No advice or actions were recorded for this hand."));
-    } else {
-      const list = make(doc, "ol", "tp-review-rows");
-      for (const row of r.rows) {
-        const li = make(doc, "li", "tp-review-row");
-        const street = make(doc, "div", "tp-review-street");
-        street.append(make(doc, "span", void 0, row.again ? `${streetName(row.street)}, again` : streetName(row.street)));
-        if (row.board.length > 0) street.append(cardsEl(doc, row.board));
-        const advice = make(doc, "div", "tp-review-line");
-        advice.append(make(doc, "span", "tp-review-label", "Advice"), make(doc, "span", void 0, row.advised?.text ?? "None recorded"));
-        const did = make(doc, "div", "tp-review-line");
-        did.append(make(doc, "span", "tp-review-label", "You"), make(doc, "span", void 0, row.did?.text ?? "No action"));
-        if (row.matched !== null) {
-          const m = make(doc, "span", "tp-review-match", row.matched ? "Matched" : "Differed");
-          m.style.color = row.matched ? THEME.good : THEME.warning;
-          did.append(m);
-        }
-        li.append(street, advice, did);
-        list.append(li);
-      }
-      card.append(list);
-    }
-    if (r.runout) {
-      const line = make(doc, "div", "tp-review-line");
-      line.style.marginTop = "4px";
-      line.append(make(doc, "span", "tp-review-label", "Board"), cardsEl(doc, r.runout));
-      card.append(line);
-    }
-    if (r.takeaway) card.append(make(doc, "p", "tp-review-take", r.takeaway));
-    return card;
-  }
-
-  // src/ui/panel.ts
-  var STATUS_TEXT = {
-    "not-seated": "Not seated",
-    waiting: "Waiting for your turn",
-    "no-cards": "No hole cards seen this hand",
-    thinking: "Thinking\u2026",
-    unreadable: "Can't read the table \u2014 advice paused",
-    tournament: "Tournament table \u2014 advice off"
-  };
-  var UI_KEY = "tp-advisor-ui";
-  var FALLBACK_HEIGHT = 40;
-  var DEFAULT_TOP = 120;
-  var CARDS_HIDDEN = "tp-cards-hidden";
-  function warn2(what, e) {
-    console.warn(`[torn-poker] ${what}`, e);
-  }
-  function loadUi() {
-    const s = { left: null, top: null, minimised: false, showCards: true, hidden: false, stopLoss: null, winTarget: null };
-    try {
-      const p = JSON.parse(localStorage.getItem(UI_KEY) ?? "null");
-      if (p && Number.isFinite(p.left) && Number.isFinite(p.top)) {
-        s.left = p.left;
-        s.top = p.top;
-      }
-      if (p && p.minimised === true) s.minimised = true;
-      if (p && p.showCards === false) s.showCards = false;
-      if (p && p.hidden === true) s.hidden = true;
-      if (p && Number.isFinite(p.stopLoss) && p.stopLoss > 0) s.stopLoss = p.stopLoss;
-      if (p && Number.isFinite(p.winTarget) && p.winTarget > 0) s.winTarget = p.winTarget;
-    } catch {
-    }
-    return s;
-  }
-  function saveUi(s) {
-    try {
-      localStorage.setItem(UI_KEY, JSON.stringify(s));
-    } catch {
-    }
-  }
-  function netColor(n) {
-    return n > 0 ? THEME.good : n < 0 ? THEME.bad : THEME.muted;
-  }
-  function actionColor(action) {
-    switch (action) {
-      case "raise":
-      case "bet":
-      case "allin":
-        return THEME.good;
-      case "call":
-      case "check":
-        return "#5aa0e0";
-      default:
-        return THEME.bad;
-    }
-  }
-  function actionLine(a) {
-    const dollars2 = a.amount === null ? "" : a.amount.toLocaleString("en-US");
-    const amt = a.amount !== null && a.bigBlind > 0 ? `${Number((a.amount / a.bigBlind).toFixed(2))} BB ($${dollars2})` : dollars2;
-    switch (a.action) {
-      case "raise":
-        return amt ? `RAISE to ${amt}` : "RAISE";
-      case "bet":
-        return amt ? `BET ${amt}` : "BET";
-      case "allin":
-        return amt ? `ALL-IN ${amt}` : "ALL-IN";
-      case "call":
-        return "CALL";
-      case "check":
-        return "CHECK";
-      default:
-        return "FOLD";
-    }
-  }
-  var pct3 = (x) => `${Math.round(x * 100)}%`;
-  var mounted = /* @__PURE__ */ new WeakMap();
-  function mountPanel(doc, h) {
-    mounted.get(doc)?.();
-    const win = doc.defaultView;
-    const ui = loadUi();
-    const el2 = (tag2, cls, text) => {
-      const e = doc.createElement(tag2);
-      if (cls) e.className = cls;
-      if (text !== void 0) e.textContent = text;
-      return e;
-    };
-    const guard2 = (what, fn) => (...args) => {
-      try {
-        fn(...args);
-      } catch (e) {
-        warn2(`${what} failed`, e);
-      }
-    };
-    const kv = (label, value, color) => {
-      const row2 = el2("div", "tp-kv");
-      const v = el2("span", void 0, value);
-      if (color) v.style.color = color;
-      row2.append(el2("span", "tp-muted", label), v);
-      return row2;
-    };
-    const style = el2("style");
-    style.id = "tp-advisor-style";
-    style.textContent = `${PANEL_CSS}${REVIEW_CSS}.${CARDS_HIDDEN} #tp-cards{display:none!important}
-`;
-    const root = el2("div");
-    root.id = "tp-advisor";
-    const title = el2("span", "tp-title");
-    title.append(el2("span", "tp-grip", "\u283F "), "Poker advisor");
-    const headNet = el2("span", "tp-head-net");
-    headNet.title = "Session net";
-    const minBtn = el2("button", "tp-min", "\u2013");
-    minBtn.type = "button";
-    minBtn.title = "Minimise";
-    const head = el2("div", "tp-head");
-    head.append(title, headNet, minBtn);
-    const tabsEl = el2("div", "tp-tabs");
-    const bodies = {
-      advice: el2("div", "tp-body"),
-      results: el2("div", "tp-body"),
-      settings: el2("div", "tp-body")
-    };
-    const tabBtns = {};
-    const showTab = (t) => {
-      Object.keys(bodies).forEach((k) => {
-        bodies[k].style.display = k === t ? "" : "none";
-        tabBtns[k].setAttribute("aria-selected", String(k === t));
-      });
-    };
-    for (const [t, label] of [["advice", "Advice"], ["results", "Results"], ["settings", "Settings"]]) {
-      const b = el2("button", "tp-tab", label);
-      b.type = "button";
-      b.addEventListener("click", guard2("tab", () => showTab(t)));
-      tabBtns[t] = b;
-      tabsEl.append(b);
-    }
-    const alertEl = el2("div", "tp-alert");
-    alertEl.style.display = "none";
-    const alertText = el2("span");
-    const alertClose = el2("button", "tp-alert-close", "\xD7");
-    alertClose.type = "button";
-    alertClose.title = "Dismiss";
-    alertClose.addEventListener("click", guard2("dismiss alert", () => {
-      alertEl.style.display = "none";
-    }));
-    alertEl.append(alertText, alertClose);
-    const content = el2("div");
-    content.append(tabsEl, bodies.advice, bodies.results, bodies.settings);
-    root.append(head, alertEl, content);
-    const applyMin = () => {
-      content.style.display = ui.minimised ? "none" : "";
-      doc.body.classList.toggle(CARDS_HIDDEN, ui.minimised || !ui.showCards);
-    };
-    let docked = false;
-    const clamp = () => {
-      if (docked) return;
-      const w = root.offsetWidth || PANEL_WIDTH;
-      const ht = root.offsetHeight || FALLBACK_HEIGHT;
-      const docEl = doc.documentElement;
-      const vw = docEl.clientWidth > 0 ? docEl.clientWidth : win?.innerWidth ?? Infinity;
-      const vh = docEl.clientHeight > 0 ? docEl.clientHeight : win?.innerHeight ?? Infinity;
-      const maxLeft = Math.max(0, vw - w);
-      const maxTop = Math.max(0, vh - ht);
-      const left = ui.left ?? (Number.isFinite(vw) ? vw - w - 16 : null);
-      const top = ui.top ?? DEFAULT_TOP;
-      if (left === null) return;
-      const l = Math.min(Math.max(0, left), maxLeft);
-      const t = Math.min(Math.max(0, top), maxTop);
-      if (ui.left !== null) {
-        ui.left = l;
-        ui.top = t;
-      }
-      root.style.left = `${l}px`;
-      root.style.top = `${t}px`;
-      root.style.right = "auto";
-    };
-    minBtn.addEventListener("click", guard2("minimise", () => {
-      ui.minimised = !ui.minimised;
-      applyMin();
-      clamp();
-      saveUi(ui);
-    }));
-    const onResize = guard2("resize", clamp);
-    win?.addEventListener("resize", onResize);
-    let endDrag = null;
-    const onBlur = () => {
-      try {
-        endDrag?.();
-      } catch (e) {
-        warn2("drag end failed", e);
-      }
-    };
-    win?.addEventListener("blur", onBlur);
-    head.addEventListener("mousedown", (down) => {
-      try {
-        if (docked || down.button !== 0 || down.target === minBtn) return;
-        endDrag?.();
-        const rect = root.getBoundingClientRect();
-        const dx = down.clientX - rect.left;
-        const dy = down.clientY - rect.top;
-        down.preventDefault();
-        down.stopPropagation();
-        let moved = false;
-        const stop = () => {
-          doc.removeEventListener("mousemove", move, true);
-          doc.removeEventListener("mouseup", up, true);
-          endDrag = null;
-          if (moved) saveUi(ui);
-        };
-        const move = (e) => {
-          try {
-            if (e.buttons === 0) {
-              stop();
-              return;
-            }
-            e.stopPropagation();
-            moved = true;
-            ui.left = e.clientX - dx;
-            ui.top = e.clientY - dy;
-            clamp();
-          } catch (err) {
-            warn2("panel drag failed", err);
-          }
-        };
-        const up = (e) => {
-          try {
-            e.stopPropagation();
-            stop();
-          } catch (err) {
-            warn2("panel drag end failed", err);
-          }
-        };
-        endDrag = stop;
-        doc.addEventListener("mousemove", move, true);
-        doc.addEventListener("mouseup", up, true);
-      } catch (err) {
-        warn2("panel drag start failed", err);
-      }
-    });
-    const adviceBox = el2("div");
-    const youLine = el2("div", "tp-you tp-muted");
-    youLine.style.cssText = "margin-top:8px;cursor:pointer;font-size:11px";
-    youLine.title = "Show your stats";
-    youLine.addEventListener("click", guard2("hero line", () => showTab("results")));
-    const reminderEl = el2("div", "tp-reminder");
-    reminderEl.style.cssText = "display:none;margin-top:6px;font-size:11px;color:#f0c060";
-    const reviewBox = el2("div");
-    bodies.advice.append(adviceBox, reviewBox, reminderEl);
-    function showReview(review) {
-      try {
-        reviewBox.replaceChildren(...review ? [buildReviewCard(doc, review, "Your last hand")] : []);
-      } catch (e) {
-        warn2("showReview failed", e);
-      }
-    }
-    function reminder(text) {
-      try {
-        reminderEl.textContent = text;
-        reminderEl.style.display = text ? "" : "none";
-      } catch (e) {
-        warn2("reminder failed", e);
-      }
-    }
-    function renderYou(hero) {
-      if (!hero || hero.hands <= 0) {
-        youLine.remove();
-        return;
-      }
-      const st = classify(hero);
-      const r = rates(hero);
-      const known = hero.hands >= MIN_HANDS_FOR_STYLE && r.vpip !== null;
-      const badge = el2("span", void 0, known ? STYLES[st].short : STYLES.Unknown.short);
-      badge.style.color = BADGE[st] === BADGE.Unknown ? "inherit" : BADGE[st];
-      badge.style.fontWeight = "bold";
-      const rest = known ? ` \xB7 play ${formatStat("vpip", r.vpip)}, raise ${formatStat("pfr", r.pfr)} \xB7 ${hero.hands} hands` : ` \xB7 ${hero.hands}/${MIN_HANDS_FOR_STYLE} hands`;
-      youLine.replaceChildren("You: ", badge, rest);
-      bodies.advice.append(youLine);
-    }
-    const render = (target, build2) => {
-      const tmp = el2("div");
-      build2(tmp);
-      target.replaceChildren(...Array.from(tmp.childNodes));
-    };
-    function setStatus(s, detail) {
-      try {
-        render(adviceBox, (box) => {
-          box.append(el2("div", void 0, STATUS_TEXT[s]));
-          if (detail) box.append(el2("div", "tp-muted", detail));
-        });
-      } catch (e) {
-        warn2("setStatus failed", e);
-      }
-    }
-    function showAdvice(a, opts) {
-      try {
-        render(adviceBox, (box) => {
-          if (opts?.preview) {
-            box.append(el2("div", "tp-preview-label", "Your next turn, as it stands"));
-          } else {
-            box.append(el2("div", "tp-turn-label", "Your turn"));
-          }
-          const big = el2("div", opts?.preview ? "tp-big tp-big-preview" : "tp-big", actionLine(a));
-          big.style.color = actionColor(a.action);
-          box.append(big);
-          if (opts?.bet && !opts.preview) box.append(buildBetSlider(doc, a, opts.bet));
-          box.append(buildMeters(doc, a));
-          if (!a.strength) box.append(kv("Hand", a.hand));
-          box.append(kv("Position", a.position));
-          if (a.potOdds !== null) box.append(kv("Pot odds to call", pct3(a.potOdds)));
-          if (a.facing) box.append(kv("Facing", `${a.facing.name} \xB7 ${a.facing.style}`));
-          const reason = el2("div", "tp-muted", a.reason);
-          reason.style.marginTop = "6px";
-          box.append(reason);
-          if (a.detail.length > 0) {
-            const list = el2("ul");
-            for (const d of a.detail) list.append(el2("li", void 0, d));
-            list.style.display = "none";
-            const more = el2("button", "tp-btn", "More");
-            more.type = "button";
-            more.addEventListener("click", guard2("more toggle", () => {
-              const open = list.style.display === "none";
-              list.style.display = open ? "" : "none";
-              more.textContent = open ? "Less" : "More";
-            }));
-            box.append(more, list);
-          }
-          const chip = el2("div", "tp-chip", `${a.confidence} confidence`);
-          chip.style.color = a.confidence === "high" ? THEME.good : a.confidence === "medium" ? THEME.warning : THEME.bad;
-          box.append(chip);
-        });
-      } catch (e) {
-        warn2("showAdvice failed", e);
-        setStatus("unreadable");
-      }
-    }
-    function heroSection(hero) {
-      const sec = el2("div", "tp-hero");
-      sec.style.marginBottom = "8px";
-      sec.append(el2("b", void 0, "Your play"));
-      if (!hero || hero.hands <= 0) {
-        sec.append(el2("div", "tp-muted", "No hands recorded yet."));
-        return sec;
-      }
-      const style2 = classify(hero);
-      const badge = el2("span", void 0, style2);
-      badge.style.cssText = `background:${BADGE[style2]};color:#fff;padding:0 5px;border-radius:3px;margin-left:6px;font-size:10px`;
-      sec.append(badge, el2("div", "tp-muted", `${hero.hands} hands${hero.hands < LOW_SAMPLE ? " \xB7 low sample" : ""}`));
-      if (style2 !== "Unknown") sec.append(el2("div", "tp-style-about", STYLES[style2].about));
-      const r = rates(hero);
-      const list = el2("div", "tp-stats");
-      for (const key of ["vpip", "pfr", "threeBet", "af", "foldToRaise", "wtsd"]) {
-        const info = STATS[key];
-        const v = verdict(key, r[key]);
-        const item = el2("div", "tp-stat-row");
-        item.title = info.help;
-        const top = el2("div", "tp-kv");
-        const name = el2("span", void 0, info.label);
-        name.append(el2("small", "tp-abbr", ` ${info.abbr}`));
-        const value = el2("b", void 0, formatStat(key, r[key]));
-        value.style.color = v === "good" ? THEME.good : v === "unknown" ? THEME.text : THEME.warning;
-        top.append(name, value);
-        const hint = v === "low" ? info.low : v === "high" ? info.high : void 0;
-        const note = el2("div", "tp-stat-note", hint ? `${hint} Good: ${goodRange(key)}` : `Good: ${goodRange(key)}`);
-        if (hint) note.style.color = THEME.warning;
-        item.append(top, note);
-        list.append(item);
-      }
-      sec.append(list);
-      if (hero.hands < MIN_HANDS_FOR_STYLE) sec.append(el2("div", "tp-muted", `Style shows after ${MIN_HANDS_FOR_STYLE} hands`));
-      return sec;
-    }
-    function netSpan(net, bb) {
-      const color = netColor(net);
-      if (typeof bb !== "number" || !Number.isFinite(bb)) {
-        const d = el2("span", void 0, formatMoney(net));
-        d.style.color = color;
-        return d;
-      }
-      const wrap = el2("span");
-      const main = el2("span", void 0, formatBB(bb));
-      main.style.color = color;
-      const dollars2 = el2("span", "tp-muted", `(${formatMoney(net)})`);
-      dollars2.style.fontSize = "0.85em";
-      wrap.append(main, " ", dollars2);
-      return wrap;
-    }
-    const plural = (n, one, many) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
-    const amount = (t) => t.bb === null ? formatMoney(t.net) : formatBB(t.bb);
-    function leakSection(report, scope) {
-      const sec = el2("div", "tp-leaks");
-      const line = (spots, text, none, hands) => {
-        const p = el2("div", "tp-leak-line");
-        if (spots === 0) {
-          p.textContent = none;
-          p.classList.add("tp-muted");
-        } else {
-          p.append(`${text(spots.toLocaleString("en-US"))} Those hands: `);
-          const v = el2("b", void 0, amount(hands));
-          v.style.color = netColor(hands.net);
-          p.append(v, ".");
-        }
-        return p;
-      };
-      sec.append(
-        line(
-          report.passedUp.spots,
-          (n) => `You passed up ${n} ${report.passedUp.spots === 1 ? "bet or raise" : "bets or raises"} ${scope}.`,
-          `You did not pass up any bets or raises ${scope}.`,
-          report.passedUp.hands
-        ),
-        line(
-          report.calledFold.spots,
-          () => `You called ${plural(report.calledFold.spots, "time", "times")} when the advice was to fold ${scope}.`,
-          `You did not call against fold advice ${scope}.`,
-          report.calledFold.hands
-        )
-      );
-      if (report.followed.hands > 0) {
-        const p = el2("div", "tp-leak-line");
-        p.append(`Hands where you followed the advice: `);
-        const v = el2("b", void 0, amount(report.followed));
-        v.style.color = netColor(report.followed.net);
-        p.append(v, ".");
-        sec.append(p);
-      }
-      sec.append(el2("div", "tp-hint", "This compares what happened on those hands. It is not the exact amount a choice cost you."));
-      return sec;
-    }
-    const SVG = "http://www.w3.org/2000/svg";
-    function profitChart(curve) {
-      const pts = curve.points;
-      if (pts.length < 3) return null;
-      const W = 250, H = 64, PAD = 4;
-      const lo = Math.min(0, ...pts), hi = Math.max(0, ...pts);
-      const span = hi - lo || 1;
-      const x = (i) => PAD + i / (pts.length - 1) * (W - 2 * PAD);
-      const y = (v) => PAD + (1 - (v - lo) / span) * (H - 2 * PAD);
-      const end = pts[pts.length - 1];
-      const color = netColor(end);
-      const svg = doc.createElementNS(SVG, "svg");
-      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-      svg.setAttribute("class", "tp-chart");
-      svg.setAttribute("role", "img");
-      svg.setAttribute("aria-label", `Net result after each hand this session, ending at ${curve.unit === "bb" ? formatBB(end) : formatMoney(end)}`);
-      const zero2 = doc.createElementNS(SVG, "line");
-      for (const [k, v] of Object.entries({ x1: PAD, x2: W - PAD, y1: y(0), y2: y(0), stroke: THEME.muted, "stroke-dasharray": "3 3", "stroke-width": 1 })) zero2.setAttribute(k, String(v));
-      const line = doc.createElementNS(SVG, "polyline");
-      line.setAttribute("points", pts.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" "));
-      for (const [k, v] of Object.entries({ fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round" })) line.setAttribute(k, String(v));
-      svg.append(zero2, line);
-      const wrap = el2("div", "tp-chart-wrap");
-      wrap.append(el2("div", "tp-muted", "This session, hand by hand"), svg);
-      return wrap;
-    }
-    function pastSessions(past) {
-      if (past.length === 0) return null;
-      const sec = el2("div", "tp-past");
-      sec.append(el2("div", "tp-muted", "Earlier sessions"));
-      for (const p of past) {
-        const item = el2("div", "tp-past-item");
-        const top = el2("div", "tp-kv");
-        top.append(
-          el2("span", void 0, `${new Date(p.start).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} \xB7 ${plural(p.hands, "hand", "hands")}`),
-          netSpan(p.net, p.bb)
-        );
-        const bits = [];
-        if (p.bbPer100 !== null) bits.push(`${formatBB(p.bbPer100)} per 100 hands`);
-        if (p.perHour) bits.push(`${p.perHour.unit === "bb" ? formatBB(p.perHour.value) : formatMoney(Math.round(p.perHour.value))} per hour`);
-        if (p.durationMs > 0) bits.push(`${Math.max(1, Math.round(p.durationMs / 6e4))} min`);
-        if (p.biggestWin > 0) bits.push(`biggest pot won ${p.biggestWin.toLocaleString("en-US")}`);
-        item.append(top);
-        if (bits.length > 0) item.append(el2("div", "tp-hint", bits.join(" \xB7 ")));
-        sec.append(item);
-      }
-      return sec;
-    }
-    const limitsOf = () => ({ stopLoss: ui.stopLoss, winTarget: ui.winTarget });
-    let alertState = { loss: false, win: false };
-    function alertMessage(kind, bb) {
-      const size = formatBB(Math.abs(bb)).replace(/^[+−]/, "");
-      return kind === "stop-loss" ? `You are down ${size} this session, past the stop-loss you set. This could be a good moment to take a break.` : `You are up ${size} this session, past the win target you set. You may want to take that and step away.`;
-    }
-    function checkAlerts(s) {
-      const r = checkLimits(alertState, s.session.bb, limitsOf());
-      alertState = r.state;
-      if (r.fired && s.session.bb !== null) {
-        alertText.textContent = alertMessage(r.fired, s.session.bb);
-        alertEl.style.display = "";
-      }
-    }
-    const openHands = /* @__PURE__ */ new Set();
-    function showResults(s, hero) {
-      try {
-        checkAlerts(s);
-        renderYou(hero);
-        if (s.session.hands > 0) {
-          headNet.replaceChildren(typeof s.session.bb === "number" && Number.isFinite(s.session.bb) ? formatBB(s.session.bb) : formatMoney(s.session.net));
-          headNet.style.color = netColor(s.session.net);
-        } else {
-          headNet.replaceChildren();
-        }
-        render(bodies.results, (box) => {
-          const tally2 = (label, t) => {
-            const row2 = el2("div", "tp-kv");
-            const v = el2("span");
-            v.append(`${t.hands.toLocaleString("en-US")} \xB7 `);
-            v.append(netSpan(t.net, t.bb));
-            row2.append(el2("span", "tp-muted", label), v);
-            return row2;
-          };
-          const netRow = (label, t) => {
-            const row2 = el2("div", "tp-kv");
-            row2.append(el2("span", "tp-muted", label), netSpan(t.net, t.bb));
-            return row2;
-          };
-          box.append(
-            heroSection(hero),
-            netRow("Session net", s.session),
-            netRow("All-time net", s.allTime),
-            kv("Hands", s.allTime.hands.toLocaleString("en-US")),
-            tally2("Followed advice", s.followed),
-            tally2("Ignored advice", s.ignored)
-          );
-          if (s.insights) {
-            const lead = el2("div", "tp-muted", "Where passive play shows up");
-            lead.style.marginTop = "8px";
-            box.append(lead, leakSection(s.insights.leaks.session, "this session"));
-            if (s.insights.leaks.allTime.followed.hands + s.insights.leaks.allTime.passedUp.spots + s.insights.leaks.allTime.calledFold.spots > 0) {
-              box.append(leakSection(s.insights.leaks.allTime, "overall"));
-            }
-            const chart = profitChart(s.insights.curve);
-            if (chart) box.append(chart);
-            const past = pastSessions(s.insights.past);
-            if (past) box.append(past);
-          }
-          const heading = el2("div", "tp-muted", "Last 20 hands");
-          heading.style.marginTop = "6px";
-          box.append(heading);
-          for (const hand of s.recent.slice(0, 20)) {
-            const mark = hand.followed === true ? "\u2713" : hand.followed === false ? "\u2717" : "\u2013";
-            const item = el2("div", "tp-hand-item");
-            const row2 = el2("button", "tp-hand-row");
-            row2.type = "button";
-            const open = openHands.has(hand.handId);
-            row2.setAttribute("aria-expanded", String(open));
-            const chevron = el2("span", "tp-hand-chevron", open ? "\u25BE" : "\u25B8");
-            chevron.setAttribute("aria-hidden", "true");
-            const main = el2("span", "tp-hand-main");
-            main.append(chevron, cardsEl(doc, hand.cards));
-            const side = el2("span", "tp-hand-side");
-            side.append(netSpan(hand.net, hand.bigBlind ? hand.net / hand.bigBlind : null), el2("span", "tp-muted", mark));
-            row2.append(main, side);
-            item.append(row2);
-            let review = null;
-            const sync2 = () => {
-              const isOpen = openHands.has(hand.handId);
-              row2.setAttribute("aria-expanded", String(isOpen));
-              chevron.textContent = isOpen ? "\u25BE" : "\u25B8";
-              if (isOpen && !review) {
-                review = buildReviewCard(doc, buildReview(hand));
-                item.append(review);
-              }
-              if (review) review.style.display = isOpen ? "" : "none";
-            };
-            row2.addEventListener("click", guard2("hand review", () => {
-              if (!openHands.delete(hand.handId)) openHands.add(hand.handId);
-              sync2();
-            }));
-            if (open) sync2();
-            box.append(item);
-          }
-        });
-      } catch (e) {
-        warn2("showResults failed", e);
-      }
-    }
-    const recBox = el2("input");
-    recBox.type = "checkbox";
-    recBox.addEventListener("change", guard2("toggle recording", () => h.onToggleRecording(recBox.checked)));
-    const recCount = el2("span", "tp-muted", "0 frames");
-    const recLabel = el2("label");
-    recLabel.append(recBox, " Record raw messages ", recCount);
-    const cardsBox = el2("input");
-    cardsBox.type = "checkbox";
-    cardsBox.checked = ui.showCards;
-    cardsBox.addEventListener("change", guard2("toggle profile cards", () => {
-      ui.showCards = cardsBox.checked;
-      applyMin();
-      saveUi(ui);
-    }));
-    const cardsLabel = el2("label");
-    cardsLabel.append(cardsBox, " Show profile cards");
-    const limitInput = (key, label, help) => {
-      const input = el2("input");
-      input.type = "number";
-      input.min = "1";
-      input.step = "1";
-      input.placeholder = "off";
-      input.style.cssText = "width:64px";
-      input.value = ui[key] === null ? "" : String(ui[key]);
-      input.addEventListener("change", guard2(`set ${key}`, () => {
-        const n = Number(input.value);
-        ui[key] = input.value.trim() !== "" && Number.isFinite(n) && n > 0 ? n : null;
-        input.value = ui[key] === null ? "" : String(ui[key]);
-        saveUi(ui);
-      }));
-      const l = el2("label");
-      l.title = help;
-      l.append(`${label} `, input, " big blinds");
-      return l;
-    };
-    const btn = (text, fn) => {
-      const b = el2("button", "tp-btn", text);
-      b.type = "button";
-      b.addEventListener("click", guard2(text, fn));
-      return b;
-    };
-    const file = el2("input");
-    file.type = "file";
-    file.accept = "application/json";
-    file.style.display = "none";
-    file.addEventListener("change", () => {
-      const f = file.files?.[0];
-      if (!f) return;
-      f.text().then((t) => h.onImportData(t)).catch((e) => warn2("import failed", e)).finally(() => {
-        try {
-          file.value = "";
-        } catch {
-        }
-      });
-    });
-    const section = (heading, ...kids) => {
-      const d = el2("div", "tp-section");
-      d.append(el2("div", "tp-section-title", heading), ...kids.filter((k) => k !== null));
-      return d;
-    };
-    const row = (...kids) => {
-      const d = el2("div");
-      d.append(...kids);
-      return d;
-    };
-    const noticeEl = el2("div", "tp-muted tp-notice");
-    noticeEl.style.display = "none";
-    const resetBtn = btn("Reset all profiles", () => {
-      if (confirm("Reset all opponent profiles?")) h.onResetProfiles();
-    });
-    resetBtn.classList.add("tp-danger");
-    bodies.settings.append(
-      section(
-        "Display",
-        cardsLabel,
-        el2("div", "tp-hint", "Optional session notes. A gentle message appears once when your session result passes a number, counted in big blinds. Leave empty to turn off."),
-        limitInput("stopLoss", "Stop-loss, down by", "Show a note when this session is down by this many big blinds"),
-        limitInput("winTarget", "Win target, up by", "Show a note when this session is up by this many big blinds")
-      ),
-      section(
-        "Your data",
-        el2("div", "tp-hint", "Back up or move your player profiles and results."),
-        row(btn("Export data", () => h.onExportData()), btn("Import data", () => file.click()), file),
-        noticeEl,
-        row(resetBtn)
-      ),
-      section("Debugging", recLabel, row(btn("Export capture", () => h.onExportCapture())))
-    );
-    function setRecording(on, frames) {
-      try {
-        recBox.checked = on;
-        recCount.textContent = `${frames.toLocaleString("en-US")} frames`;
-      } catch (e) {
-        warn2("setRecording failed", e);
-      }
-    }
-    function notice(text) {
-      try {
-        noticeEl.textContent = text;
-        noticeEl.style.display = text ? "" : "none";
-      } catch (e) {
-        warn2("notice failed", e);
-      }
-    }
-    const applyHidden = () => {
-      root.style.display = ui.hidden && docked ? "none" : "";
-    };
-    function dockInto(anchor) {
-      try {
-        if (anchor) {
-          if (!root.isConnected || root.previousElementSibling !== anchor) anchor.after(root);
-          if (!docked) {
-            docked = true;
-            root.classList.add("tp-docked");
-            root.style.left = root.style.top = root.style.right = "";
-            applyHidden();
-          }
-        } else if (docked || !root.isConnected) {
-          docked = false;
-          root.classList.remove("tp-docked");
-          doc.body.appendChild(root);
-          applyHidden();
-          clamp();
-        }
-      } catch (e) {
-        warn2("dock failed", e);
-      }
-    }
-    function toggleVisible() {
-      ui.hidden = !ui.hidden;
-      applyHidden();
-      saveUi(ui);
-      if (!ui.hidden) clamp();
-      return !ui.hidden;
-    }
-    mounted.set(doc, () => {
-      endDrag?.();
-      win?.removeEventListener("resize", onResize);
-      win?.removeEventListener("blur", onBlur);
-      root.remove();
-      style.remove();
-      doc.body.classList.remove(CARDS_HIDDEN);
-    });
-    setStatus("not-seated");
-    showTab("advice");
-    applyMin();
-    applyHidden();
-    doc.head.appendChild(style);
-    doc.body.appendChild(root);
-    clamp();
-    return { setStatus, showAdvice, showResults, showReview, setRecording, notice, reminder, dockInto, toggleVisible, isVisible: () => !ui.hidden };
   }
 
   // src/ui/bet-box.ts
@@ -2538,9 +2771,9 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
 #${ROW_ID}{margin:0;padding:6px 10px;background:rgba(0,0,0,.35);border-top:1px solid rgba(255,255,255,.08);border-bottom:1px solid rgba(0,0,0,.4);font:13px/1.4 Arial,sans-serif;color:#eee;text-align:left;box-sizing:border-box}
 #${ROW_ID} b{font:15px 'Fjalla One',sans-serif;letter-spacing:.4px;text-transform:uppercase}
 #${ROW_ID} *{box-sizing:border-box}
-#${ROW_ID}.tp-preview{opacity:.8}
-#${ROW_ID} .tp-hud-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-right:6px}
-#${ROW_ID} .tp-hud-meta{color:#999;font-size:12px;margin-left:6px}
+#${ROW_ID}.tp-preview{border-top-style:dashed;border-top-color:rgba(255,255,255,.3)}
+#${ROW_ID} .tp-hud-label{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#aaa;margin-right:6px}
+#${ROW_ID} .tp-hud-meta{color:#aaa;font-size:12px;margin-left:6px}
 /* Slider styled like Torn's own controls: one row, recessed track, grey fader knob, inset readout */
 /* Torn's own bet box shows the amount, so only the label and track show here */
 #${ROW_ID} .tp-bet{display:grid;grid-template-columns:auto 1fr;grid-template-areas:"title track";align-items:center;column-gap:10px;margin:6px 0 2px;padding:0;border:0;background:none}
@@ -2549,18 +2782,18 @@ ${RANGE_GRID_RULES.map((r) => `#${CARDS_ID} ${r}`).join("\n")}
 #${ROW_ID} .tp-bet-title{grid-area:title;font:14px 'Fjalla One',sans-serif;letter-spacing:.4px;text-transform:uppercase;color:#bbb}
 #${ROW_ID} .tp-bet-track{grid-area:track;margin:0;height:22px;display:flex;align-items:center}
 #${ROW_ID} .tp-bet-note{display:none}
-#${ROW_ID} .tp-bet-note.tp-bet-error{display:block;grid-column:1/-1;font-size:11px}
+#${ROW_ID} .tp-bet-note.tp-bet-error{display:block;grid-column:1/-1;font-size:12px}
 #${ROW_ID} .tp-bet-tick{top:2px;height:18px;width:2px;background:#f0a030;opacity:.9;z-index:1}
 #${ROW_ID} .tp-bet-range{-webkit-appearance:none;appearance:none;width:100%;height:8px;margin:0;padding:0;border-radius:4px;border:1px solid #111;box-shadow:inset 0 1px 3px rgba(0,0,0,.9),0 1px 0 rgba(255,255,255,.08);background:linear-gradient(to right,#6aa84f 0,#6aa84f var(--tp-fill,0%),#1a1a1a var(--tp-fill,0%),#1a1a1a 100%);cursor:pointer}
 #${ROW_ID} .tp-bet-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:22px;border-radius:3px;border:1px solid #111;background:linear-gradient(#8a8a8a,#555 55%,#3d3d3d);box-shadow:0 1px 3px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.25);position:relative;z-index:2}
 #${ROW_ID} .tp-bet-range::-moz-range-thumb{width:14px;height:22px;border-radius:3px;border:1px solid #111;background:linear-gradient(#8a8a8a,#555 55%,#3d3d3d);box-shadow:0 1px 3px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.25)}
 #${ROW_ID} .tp-bet-range:hover::-webkit-slider-thumb{background:linear-gradient(#9a9a9a,#666 55%,#4a4a4a)}
-#${ROW_ID} .tp-bet-range:focus-visible{outline:1px solid #888;outline-offset:3px}
 ${SEL.buttonsWrap} button.${ADVISED2}{box-shadow:inset 0 0 0 2px var(--tp-adv),0 0 10px var(--tp-adv)!important}
 #${TOGGLE_ID} button{display:flex;align-items:center;justify-content:center}
 #${TOGGLE_ID} button svg{width:16px;height:16px;fill:#9a9a9a}
 #${TOGGLE_ID} button[aria-pressed="true"] svg{fill:#5fd35f}
-`;
+#${TOGGLE_ID} button[aria-pressed="false"] svg path{fill:none;stroke:#9a9a9a;stroke-width:1.5}
+${SHARED_CSS}${FOCUS_CSS}`;
   function matchesAction(text, action) {
     const t = text.trim().toLowerCase();
     switch (action) {
@@ -2608,6 +2841,7 @@ ${SEL.buttonsWrap} button.${ADVISED2}{box-shadow:inset 0 0 0 2px var(--tp-adv),0
       const label = doc.createElement("span");
       label.className = "tp-hud-label";
       label.textContent = preview ? "If it comes to you" : "Advised";
+      if (preview) label.title = "Updates as players act";
       const act = doc.createElement("b");
       act.textContent = actionLine(a);
       act.style.color = actionColor(a.action);
@@ -2622,8 +2856,8 @@ ${SEL.buttonsWrap} button.${ADVISED2}{box-shadow:inset 0 0 0 2px var(--tp-adv),0
       btn.type = "button";
       const like = q(`${SEL.topRow} ${SEL.toggleButton}`);
       if (like) btn.className = like.className;
-      btn.setAttribute("aria-label", "Poker advisor");
-      btn.title = "Show or hide the Poker advisor";
+      btn.setAttribute("aria-label", "Poker Advisor");
+      btn.title = "Show or hide the Poker Advisor";
       btn.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0 15 8 8 16 1 8Z"/></svg>';
       btn.setAttribute("aria-pressed", String(panel.isVisible?.() ?? true));
       btn.addEventListener("click", () => {
@@ -2648,7 +2882,7 @@ ${SEL.buttonsWrap} button.${ADVISED2}{box-shadow:inset 0 0 0 2px var(--tp-adv),0
       const opts = q(SEL.betOptions);
       if (!opts) return;
       const live = shown && !shown.preview && shown.bet ? shown : null;
-      for (const [key, label] of [["twothirds", "\u2154"], ["advised", "Advised"]]) {
+      for (const [key, label, what] of [["twothirds", "\u2154", "Bet \u2154 of the pot"], ["advised", "Advised", "Bet the advised amount"]]) {
         let b = opts.querySelector(`[${PRESET}="${key}"]`);
         const amount = live ? presetAmount(key, live) : null;
         if (amount === null) {
@@ -2662,13 +2896,16 @@ ${SEL.buttonsWrap} button.${ADVISED2}{box-shadow:inset 0 0 0 2px var(--tp-adv),0
           const like = opts.querySelector("button:not([data-tp-preset])");
           if (like) b.className = like.className;
           b.textContent = label;
-          if (key === "advised") b.style.color = "#f0a030";
+          b.title = what;
+          b.setAttribute("aria-label", what);
+          if (key === "advised") b.style.color = THEME.warning;
           b.addEventListener("click", () => {
             try {
               const cur = shown && !shown.preview ? shown : null;
               const amt = cur ? presetAmount(key, cur) : null;
-              if (cur?.bet && amt !== null && cur.bet.onChange(amt)) {
-                row.querySelector(".tp-bet")?.dispatchEvent(new CustomEvent(SET_AMOUNT, { detail: amt }));
+              if (cur?.bet && amt !== null) {
+                const event = cur.bet.onChange(amt) ? new CustomEvent(SET_AMOUNT, { detail: amt }) : new CustomEvent(FILL_FAILED);
+                row.querySelector(".tp-bet")?.dispatchEvent(event);
               }
             } catch (e) {
               warn3("preset failed", e);
