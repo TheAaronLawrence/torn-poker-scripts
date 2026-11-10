@@ -178,6 +178,175 @@
     return { state: { loss: lossNow, win: winNow }, fired };
   }
 
+  // src/ui/glossary.ts
+  var STATS = {
+    vpip: {
+      label: "Hands played",
+      abbr: "VPIP",
+      help: "How often you put money in before the flop by choice (blinds don\u2019t count).",
+      good: [18, 28],
+      low: "Very tight: you can open up a little.",
+      high: "Playing too many hands."
+    },
+    pfr: {
+      label: "Raised before the flop",
+      abbr: "PFR",
+      help: "How often you raise before the flop.",
+      good: [14, 22],
+      low: "Raise more of the hands you play instead of calling.",
+      high: "Raising a lot: make sure the hands back it up."
+    },
+    threeBet: {
+      label: "Re-raised a raise",
+      abbr: "3-bet",
+      help: "When someone raised before you, how often you raised again.",
+      good: [5, 10],
+      low: "Re-raise your best hands rather than calling.",
+      high: "Re-raising a lot: good players will push back."
+    },
+    af: {
+      label: "Aggression",
+      abbr: "AF",
+      ratio: true,
+      help: "After the flop: bets and raises for every call. Below 1.5 is passive.",
+      good: [2, 4],
+      low: "Passive: bet and raise more, call less.",
+      high: "Very aggressive: pick your bluffs."
+    },
+    foldToRaise: {
+      label: "Folded when raised",
+      abbr: "Fold to raise",
+      help: "When someone raised you, how often you folded.",
+      good: [35, 60],
+      low: "Hard to push off a hand: fold more weak hands to raises.",
+      high: "Easy to push around: players can bluff you off hands."
+    },
+    cbet: {
+      label: "Bets flop after raising",
+      abbr: "Continuation bet",
+      help: "After you raised before the flop, how often you bet the flop when nobody bet before you.",
+      good: [50, 70],
+      low: "Giving up too often after raising: bet the flop more when checked to.",
+      high: "Betting the flop every time: check your weak hands sometimes."
+    },
+    foldToCbet: {
+      label: "Folds to follow-up bet",
+      abbr: "Fold to continuation bet",
+      help: "When the player who raised before the flop bets the flop, how often you fold.",
+      good: [35, 55],
+      low: "Hard to push off a hand: fold more weak hands to a flop bet.",
+      high: "Easy to bluff: players bet the flop knowing you will fold."
+    },
+    wtsd: {
+      label: "Went to showdown",
+      abbr: "WTSD",
+      help: "Of the hands where you saw the flop, how often you got to the end.",
+      good: [24, 33],
+      low: "Giving up often after the flop.",
+      high: "Calling down too much: fold more by the river."
+    }
+  };
+  function verdict(key, value) {
+    const g = STATS[key].good;
+    if (value === null || !g) return "unknown";
+    return value < g[0] ? "low" : value > g[1] ? "high" : "good";
+  }
+  function formatStat(key, value) {
+    if (value === null) return "\u2013";
+    return STATS[key].ratio ? value.toFixed(1) : `${Math.round(value)}%`;
+  }
+  function goodRange(key) {
+    const g = STATS[key].good;
+    if (!g) return "";
+    return STATS[key].ratio ? `${g[0]}\u2013${g[1]}` : `${g[0]}\u2013${g[1]}%`;
+  }
+  var STYLES = {
+    "Tight-Aggressive": { short: "Solid", about: "Plays few hands and bets them hard. The style that wins." },
+    Aggro: { short: "Aggro", about: "Plays lots of hands and raises often." },
+    Maniac: { short: "Maniac", about: "Bets and raises with almost anything." },
+    "Calling station": { short: "Caller", about: "Plays lots of hands and calls rather than raises." },
+    Rock: { short: "Rock", about: "Plays very few hands and rarely raises without a big one." },
+    Unknown: { short: "Learning", about: "Not enough hands seen to judge yet." }
+  };
+
+  // src/results/progress.ts
+  var MIN_SESSION_HANDS = 20;
+  var SPARK_SESSIONS = 10;
+  var ROLLING_SESSIONS = 5;
+  var PROGRESS_KEYS = ["vpip", "pfr", "af", "followed"];
+  var isRaise = (a) => a === "bet" || a === "raise" || a === "allin";
+  function handCounts(h) {
+    const pre = h.taken.filter((t) => t.street === "preflop");
+    const post = h.taken.filter((t) => t.street !== "preflop");
+    return {
+      preflopHands: pre.length > 0 ? 1 : 0,
+      played: pre.some((t) => t.action === "call" || isRaise(t.action)) ? 1 : 0,
+      raised: pre.some((t) => isRaise(t.action)) ? 1 : 0,
+      aggressive: post.filter((t) => isRaise(t.action)).length,
+      calls: post.filter((t) => t.action === "call").length,
+      advisedHands: h.followed === null ? 0 : 1,
+      followedHands: h.followed === true ? 1 : 0
+    };
+  }
+  function sum(hands) {
+    const c = { preflopHands: 0, played: 0, raised: 0, aggressive: 0, calls: 0, advisedHands: 0, followedHands: 0 };
+    for (const h of hands) {
+      const k = handCounts(h);
+      for (const key of Object.keys(c)) c[key] += k[key];
+    }
+    return c;
+  }
+  function playStats(hands) {
+    const c = sum(hands);
+    const pct5 = (n, d) => d === 0 ? null : n / d * 100;
+    return {
+      vpip: pct5(c.played, c.preflopHands),
+      pfr: pct5(c.raised, c.preflopHands),
+      af: c.calls === 0 ? null : c.aggressive / c.calls,
+      followed: pct5(c.followedHands, c.advisedHands)
+    };
+  }
+  var LABELS = {
+    vpip: STATS.vpip.label,
+    pfr: STATS.pfr.label,
+    af: STATS.af.label,
+    followed: "Following the advice"
+  };
+  function formatProgress(key, v) {
+    if (key !== "followed") return formatStat(key, v);
+    return v === null ? "\u2013" : `${Math.round(v)}%`;
+  }
+  function trendText(key, values) {
+    if (values.length < 3) return `Needs at least 3 sessions of ${MIN_SESSION_HANDS}+ hands to show a trend.`;
+    const window2 = values.slice(-ROLLING_SESSIONS);
+    const from = window2[0];
+    const to = window2[window2.length - 1];
+    const step = key === "af" ? 0.2 : 3;
+    const move = Math.abs(to - from) < step ? `${LABELS[key]} is steady at ${formatProgress(key, to)}` : `${LABELS[key]} is ${to > from ? "up" : "down"} from ${formatProgress(key, from)} to ${formatProgress(key, to)}`;
+    const good = key === "followed" ? null : STATS[key].good;
+    const range = good && key !== "followed" ? `, ${to < good[0] ? "still below" : to > good[1] ? "above" : "inside"} the ${goodRange(key)} target` : "";
+    return `${move} over your last ${window2.length} sessions${range}.`;
+  }
+  function computeProgress(hands) {
+    const all = splitSessions(hands);
+    const long = all.filter((s) => s.length >= MIN_SESSION_HANDS);
+    const sessions = long.slice(-SPARK_SESSIONS).map((s) => ({ start: s[0].at, hands: s.length, stats: playStats(s) }));
+    const pooled = playStats(long.slice(-ROLLING_SESSIONS).flat());
+    const stats = PROGRESS_KEYS.map((key) => {
+      const values = sessions.map((s) => s.stats[key]).filter((v) => v !== null);
+      return {
+        key,
+        label: LABELS[key],
+        values,
+        latest: values.length > 0 ? values[values.length - 1] : null,
+        rolling: pooled[key],
+        good: key === "followed" ? null : STATS[key].good,
+        trend: trendText(key, values)
+      };
+    });
+    return { sessions, skipped: all.length - long.length, stats };
+  }
+
   // src/profiles/stats.ts
   var HALF_LIFE_HANDS = 300;
   var MIN_HANDS_FOR_STYLE = 15;
@@ -380,97 +549,6 @@
     }
   }
 
-  // src/ui/glossary.ts
-  var STATS = {
-    vpip: {
-      label: "Hands played",
-      abbr: "VPIP",
-      help: "How often you put money in before the flop by choice (blinds don\u2019t count).",
-      good: [18, 28],
-      low: "Very tight: you can open up a little.",
-      high: "Playing too many hands."
-    },
-    pfr: {
-      label: "Raised before the flop",
-      abbr: "PFR",
-      help: "How often you raise before the flop.",
-      good: [14, 22],
-      low: "Raise more of the hands you play instead of calling.",
-      high: "Raising a lot: make sure the hands back it up."
-    },
-    threeBet: {
-      label: "Re-raised a raise",
-      abbr: "3-bet",
-      help: "When someone raised before you, how often you raised again.",
-      good: [5, 10],
-      low: "Re-raise your best hands rather than calling.",
-      high: "Re-raising a lot: good players will push back."
-    },
-    af: {
-      label: "Aggression",
-      abbr: "AF",
-      ratio: true,
-      help: "After the flop: bets and raises for every call. Below 1.5 is passive.",
-      good: [2, 4],
-      low: "Passive: bet and raise more, call less.",
-      high: "Very aggressive: pick your bluffs."
-    },
-    foldToRaise: {
-      label: "Folded when raised",
-      abbr: "Fold to raise",
-      help: "When someone raised you, how often you folded.",
-      good: [35, 60],
-      low: "Hard to push off a hand: fold more weak hands to raises.",
-      high: "Easy to push around: players can bluff you off hands."
-    },
-    cbet: {
-      label: "Bets flop after raising",
-      abbr: "Continuation bet",
-      help: "After you raised before the flop, how often you bet the flop when nobody bet before you.",
-      good: [50, 70],
-      low: "Giving up too often after raising: bet the flop more when checked to.",
-      high: "Betting the flop every time: check your weak hands sometimes."
-    },
-    foldToCbet: {
-      label: "Folds to follow-up bet",
-      abbr: "Fold to continuation bet",
-      help: "When the player who raised before the flop bets the flop, how often you fold.",
-      good: [35, 55],
-      low: "Hard to push off a hand: fold more weak hands to a flop bet.",
-      high: "Easy to bluff: players bet the flop knowing you will fold."
-    },
-    wtsd: {
-      label: "Went to showdown",
-      abbr: "WTSD",
-      help: "Of the hands where you saw the flop, how often you got to the end.",
-      good: [24, 33],
-      low: "Giving up often after the flop.",
-      high: "Calling down too much: fold more by the river."
-    }
-  };
-  function verdict(key, value) {
-    const g = STATS[key].good;
-    if (value === null || !g) return "unknown";
-    return value < g[0] ? "low" : value > g[1] ? "high" : "good";
-  }
-  function formatStat(key, value) {
-    if (value === null) return "\u2013";
-    return STATS[key].ratio ? value.toFixed(1) : `${Math.round(value)}%`;
-  }
-  function goodRange(key) {
-    const g = STATS[key].good;
-    if (!g) return "";
-    return STATS[key].ratio ? `${g[0]}\u2013${g[1]}` : `${g[0]}\u2013${g[1]}%`;
-  }
-  var STYLES = {
-    "Tight-Aggressive": { short: "Solid", about: "Plays few hands and bets them hard. The style that wins." },
-    Aggro: { short: "Aggro", about: "Plays lots of hands and raises often." },
-    Maniac: { short: "Maniac", about: "Bets and raises with almost anything." },
-    "Calling station": { short: "Caller", about: "Plays lots of hands and calls rather than raises." },
-    Rock: { short: "Rock", about: "Plays very few hands and rarely raises without a big one." },
-    Unknown: { short: "Learning", about: "Not enough hands seen to judge yet." }
-  };
-
   // src/ui/theme.ts
   var THEME = {
     bg: "#1b1b1b",
@@ -602,6 +680,11 @@
 #tp-advisor .tp-leak-line{font-size:12px;margin-bottom:3px}
 #tp-advisor .tp-chart-wrap{margin:8px 0}
 #tp-advisor .tp-chart{display:block;width:100%;height:auto;margin-top:2px;background:rgba(255,255,255,.03);border-radius:4px}
+#tp-advisor .tp-progress{margin:8px 0}
+#tp-advisor .tp-progress-item{padding:4px 0;border-bottom:1px solid #252525}
+#tp-advisor .tp-progress-item .tp-kv{border:0;padding:0}
+#tp-advisor .tp-progress-item .tp-hint{margin:2px 0 0}
+#tp-advisor .tp-num{font-variant-numeric:tabular-nums}
 #tp-advisor .tp-past{margin:8px 0}
 #tp-advisor .tp-past-item{padding:3px 0;border-bottom:1px solid #252525}
 #tp-advisor .tp-past-item .tp-kv{border:0;padding:0}
@@ -629,6 +712,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   };
   var SET_AMOUNT = "tp-set-amount";
   var FILL_FAILED = "tp-fill-failed";
+  var NUDGE = "tp-nudge";
   var MISSING_BOX = "Couldn\u2019t find Torn\u2019s bet box. Wait for your turn, then try again.";
   function buildBetSlider(doc, a, r, opts = {}) {
     const wrap = el(doc, "div", "tp-bet");
@@ -703,6 +787,9 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       show(bound(amount));
     });
     wrap.addEventListener(FILL_FAILED, showFailure);
+    wrap.addEventListener(NUDGE, guard("bet nudge", (e) => {
+      pick(stepFrom(Number(e.detail) < 0 ? -1 : 1));
+    }));
     range.addEventListener("input", guard("bet slider", () => pick(Number(range.value))));
     range.addEventListener("keydown", guard("bet slider key", (e) => {
       const jump = {
@@ -978,7 +1065,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         followed: tally(hs.filter((h) => h.followed === true)),
         ignored: tally(hs.filter((h) => h.followed === false)),
         recent: hs.slice(-RECENT).reverse(),
-        insights: computeInsights(hs, now)
+        insights: computeInsights(hs, now),
+        progress: computeProgress(hs)
       };
     }
     flush() {
@@ -1671,6 +1759,48 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       wrap.append(el2("h4", "tp-subhead tp-muted", "This session, hand by hand"), svg);
       return wrap;
     }
+    function sparkline(p) {
+      const W = 250, H = 44, PAD = 4;
+      const vs = p.values;
+      const lo = Math.min(...vs, ...p.good ?? []), hi = Math.max(...vs, ...p.good ?? []);
+      const span = hi - lo || 1;
+      const x = (i) => PAD + i / (vs.length - 1) * (W - 2 * PAD);
+      const y = (v) => PAD + (1 - (v - lo) / span) * (H - 2 * PAD);
+      const svg = doc.createElementNS(SVG, "svg");
+      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      svg.setAttribute("class", "tp-chart");
+      svg.setAttribute("role", "img");
+      const range = p.good && p.key !== "followed" ? ` The target range is ${goodRange(p.key)}.` : "";
+      svg.setAttribute("aria-label", `${p.label} over your last ${plural(vs.length, "session", "sessions")}, oldest first: ${vs.map((v) => formatProgress(p.key, v)).join(", ")}.${range}`);
+      if (p.good) {
+        const band = doc.createElementNS(SVG, "rect");
+        for (const [k, v] of Object.entries({ x: 0, width: W, y: y(p.good[1]), height: Math.max(1, y(p.good[0]) - y(p.good[1])), fill: THEME.good, "fill-opacity": 0.18 })) band.setAttribute(k, String(v));
+        svg.append(band);
+      }
+      const line = doc.createElementNS(SVG, "polyline");
+      line.setAttribute("points", vs.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" "));
+      for (const [k, v] of Object.entries({ fill: "none", stroke: THEME.draw, "stroke-width": 2, "stroke-linejoin": "round" })) line.setAttribute(k, String(v));
+      const dot = doc.createElementNS(SVG, "circle");
+      for (const [k, v] of Object.entries({ cx: x(vs.length - 1), cy: y(vs[vs.length - 1]), r: 3, fill: THEME.draw })) dot.setAttribute(k, String(v));
+      svg.append(line, dot);
+      return svg;
+    }
+    function progressSection(report) {
+      const sec = el2("div", "tp-progress");
+      sec.append(el2("h4", "tp-subhead tp-muted", "Your progress"));
+      sec.append(el2("div", "tp-hint", `How you play, not how much you win. Only sessions of ${MIN_SESSION_HANDS} or more hands count, up to ${SPARK_SESSIONS} of the latest.`));
+      for (const p of report.stats) {
+        const item = el2("div", "tp-progress-item");
+        const top = el2("div", "tp-kv");
+        top.append(el2("span", void 0, p.label), el2("b", "tp-num", formatProgress(p.key, p.latest)));
+        item.append(top);
+        if (p.values.length >= 2) item.append(sparkline(p));
+        item.append(el2("div", "tp-hint", p.trend));
+        sec.append(item);
+      }
+      if (report.skipped > 0) sec.append(el2("div", "tp-hint", `${plural(report.skipped, "shorter session", "shorter sessions")} left out.`));
+      return sec;
+    }
     function pastSessions(past) {
       if (past.length === 0) return null;
       const sec = el2("div", "tp-past");
@@ -1753,6 +1883,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
             const past = pastSessions(s.insights.past);
             if (past) box.append(past);
           }
+          if (s.progress && s.progress.sessions.length > 0) box.append(progressSection(s.progress));
           const heading = el2("h4", "tp-subhead tp-muted", "Last 20 hands");
           heading.style.marginTop = "6px";
           box.append(heading, el2("div", "tp-legend", "\u2713 followed the advice \xB7 \u2717 went against it \xB7 \u2013 no advice recorded. Click a hand to review it."));
@@ -1979,14 +2110,109 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   }
 
   // src/profiles/labels.ts
-  var LABELS = {
+  var LABELS2 = {
     fish: { name: "Fish", colour: "#1e9e6a", help: "Weak player who loses money. Target them." },
     rock: { name: "Rock", colour: "#6c7a89", help: "Plays only strong hands." },
     maniac: { name: "Maniac", colour: "#e0592a", help: "Bets and raises wildly." },
     reg: { name: "Reg", colour: "#3b82c4", help: "Regular who plays well. Be careful." }
   };
-  var LABEL_KEYS = Object.keys(LABELS);
-  var isLabel = (v) => typeof v === "string" && Object.hasOwn(LABELS, v);
+  var LABEL_KEYS = Object.keys(LABELS2);
+  var isLabel = (v) => typeof v === "string" && Object.hasOwn(LABELS2, v);
+
+  // src/core/evaluator.ts
+  var CATEGORIES = [
+    "High card",
+    "Pair",
+    "Two pair",
+    "Trips",
+    "Straight",
+    "Flush",
+    "Full house",
+    "Quads",
+    "Straight flush"
+  ];
+  function categoryOf(value) {
+    return CATEGORIES[value >>> 20];
+  }
+  var counts = new Int8Array(13);
+  var suitMasks = new Int32Array(4);
+  function popcount(m) {
+    let n = 0;
+    while (m) {
+      m &= m - 1;
+      n++;
+    }
+    return n;
+  }
+  function straightHigh(mask) {
+    const m = mask << 1 | mask >> 12;
+    for (let h = 13; h >= 4; h--) {
+      if ((m >> h - 4 & 31) === 31) return h - 1;
+    }
+    return -1;
+  }
+  function topRanks(mask, n) {
+    let out = 0;
+    for (let r = 12; r >= 0 && n > 0; r--) {
+      if (mask & 1 << r) {
+        out = out << 4 | r;
+        n--;
+      }
+    }
+    return out;
+  }
+  function evaluate(cards) {
+    counts.fill(0);
+    suitMasks.fill(0);
+    let rankMask2 = 0;
+    for (let i = 0; i < cards.length; i++) {
+      const c = cards[i];
+      const r = c >> 2;
+      counts[r]++;
+      suitMasks[c & 3] |= 1 << r;
+      rankMask2 |= 1 << r;
+    }
+    for (let s = 0; s < 4; s++) {
+      const sm = suitMasks[s];
+      if (popcount(sm) >= 5) {
+        const sh2 = straightHigh(sm);
+        if (sh2 >= 0) return 8 << 20 | sh2;
+        return 5 << 20 | topRanks(sm, 5);
+      }
+    }
+    let quad = -1;
+    let trips = -1;
+    let pairA = -1;
+    let pairB = -1;
+    for (let r = 12; r >= 0; r--) {
+      const n = counts[r];
+      if (n === 4) quad = r;
+      else if (n === 3) {
+        if (trips < 0) trips = r;
+        else if (pairA < 0) pairA = r;
+      } else if (n === 2) {
+        if (pairA < 0) pairA = r;
+        else if (pairB < 0) pairB = r;
+      }
+    }
+    if (quad >= 0) {
+      return 7 << 20 | quad << 4 | topRanks(rankMask2 & ~(1 << quad), 1);
+    }
+    if (trips >= 0 && pairA >= 0) return 6 << 20 | trips << 4 | pairA;
+    const sh = straightHigh(rankMask2);
+    if (sh >= 0) return 4 << 20 | sh;
+    if (trips >= 0) {
+      return 3 << 20 | trips << 8 | topRanks(rankMask2 & ~(1 << trips), 2);
+    }
+    if (pairB >= 0) {
+      const used = 1 << pairA | 1 << pairB;
+      return 2 << 20 | pairA << 8 | pairB << 4 | topRanks(rankMask2 & ~used, 1);
+    }
+    if (pairA >= 0) {
+      return 1 << 20 | pairA << 16 | topRanks(rankMask2 & ~(1 << pairA), 3);
+    }
+    return topRanks(rankMask2, 5);
+  }
 
   // src/core/preflop-order.ts
   var PREFLOP_ORDER = [
@@ -2208,9 +2434,9 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return r;
   }
   function rangePercent(r) {
-    let sum = 0;
-    for (let i = 0; i < COMBOS; i++) sum += r[i];
-    return sum / COMBOS * 100;
+    let sum2 = 0;
+    for (let i = 0; i < COMBOS; i++) sum2 += r[i];
+    return sum2 / COMBOS * 100;
   }
   function removeDead(r, dead) {
     const out = Float32Array.from(r);
@@ -2222,6 +2448,116 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return out;
   }
 
+  // src/core/strength.ts
+  var classCombos = (cls) => cls.length === 2 ? 6 : cls.endsWith("s") ? 4 : 12;
+  function handStrength(hole, board) {
+    if (board.length < 3) return preflopStrength(hole);
+    const dead = /* @__PURE__ */ new Set([...hole, ...board]);
+    const mine = evaluate([...hole, ...board]);
+    let beat = 0;
+    let total2 = 0;
+    for (let i = 0; i < COMBOS; i++) {
+      const [a, b] = comboCards(i);
+      if (dead.has(a) || dead.has(b)) continue;
+      const theirs = evaluate([a, b, ...board]);
+      total2++;
+      if (mine > theirs) beat += 1;
+      else if (mine === theirs) beat += 0.5;
+    }
+    const value = total2 > 0 ? beat / total2 : 0;
+    return { value, note: `Beats ${Math.round(value * 100)}% of hands` };
+  }
+  function preflopStrength(hole) {
+    const cls = handClass(hole[0], hole[1]);
+    let before = 0;
+    for (const c of PREFLOP_ORDER) {
+      if (c === cls) break;
+      before += classCombos(c);
+    }
+    const mine = classCombos(cls);
+    const value = 1 - (before + mine / 2) / COMBOS;
+    if (value >= 0.5) {
+      const top = Math.max(1, Math.round((before + mine) / COMBOS * 100));
+      return { value, note: `Top ${top}% of starting hands` };
+    }
+    const bottom = Math.max(1, Math.round((1 - before / COMBOS) * 100));
+    return { value, note: `Bottom ${bottom}% of starting hands` };
+  }
+
+  // src/profiles/bet-sizes.ts
+  var BUCKETS = ["small", "medium", "large"];
+  var SIZE_EDGES = { small: 0.4, large: 0.85 };
+  var GRADE_EDGES = { strong: 0.85, weak: 0.6 };
+  var MIN_SHOWDOWNS = 4;
+  var AGREE = { strong: 0.7, weak: 0.6 };
+  var bucketOf = (fraction) => fraction < SIZE_EDGES.small ? "small" : fraction <= SIZE_EDGES.large ? "medium" : "large";
+  function betFraction(a, levelBefore) {
+    const aggressive = a.action === "bet" || a.action === "raise" || a.action === "allin" && a.handBetAfter > levelBefore;
+    const pot = a.potBefore + a.toCallBefore;
+    if (!aggressive || !(pot > 0)) return null;
+    return Math.max(0, a.handBetAfter - levelBefore) / pot;
+  }
+  function gradeHand(hole, board) {
+    const v = handStrength(hole, board).value;
+    return v >= GRADE_EDGES.strong ? "strong" : v < GRADE_EDGES.weak ? "weak" : "medium";
+  }
+  function betBuckets(hand, userID) {
+    let level = hand.bigBlind;
+    const biggest = /* @__PURE__ */ new Map();
+    for (const a of hand.actions) {
+      if (a.userID === userID && a.street !== "preflop") {
+        const f = betFraction(a, level);
+        if (f !== null && f > (biggest.get(a.street) ?? -1)) biggest.set(a.street, f);
+      }
+      if (a.handBetAfter > level) level = a.handBetAfter;
+    }
+    return [...biggest.values()].map(bucketOf);
+  }
+  var empty = () => ({
+    small: { seen: 0, strong: 0, weak: 0 },
+    medium: { seen: 0, strong: 0, weak: 0 },
+    large: { seen: 0, strong: 0, weak: 0 }
+  });
+  function addBetSizes(prev, hand, userID) {
+    const shown = hand.shown.find((x) => x.userID === userID);
+    if (!shown || shown.cards.length !== 2 || hand.board.length < 3) return prev;
+    const buckets = betBuckets(hand, userID);
+    if (buckets.length === 0) return prev;
+    const grade = gradeHand([shown.cards[0], shown.cards[1]], hand.board);
+    const out = prev ? { small: { ...prev.small }, medium: { ...prev.medium }, large: { ...prev.large } } : empty();
+    for (const b of buckets) {
+      out[b].seen += 1;
+      if (grade === "strong") out[b].strong += 1;
+      else if (grade === "weak") out[b].weak += 1;
+    }
+    return out;
+  }
+  var isCount = (v) => typeof v === "number" && Number.isInteger(v) && v >= 0;
+  function isBetSizes(v) {
+    if (v === null || typeof v !== "object") return false;
+    const o = v;
+    return BUCKETS.every((b) => {
+      const r = o[b];
+      return r !== null && typeof r === "object" && isCount(r.seen) && isCount(r.strong) && isCount(r.weak) && r.strong + r.weak <= r.seen;
+    });
+  }
+  var BUCKET_WORD = { small: "Small", medium: "Medium", large: "Big" };
+  function readBetSize(sizes, bucket) {
+    const r = sizes?.[bucket];
+    if (!r || r.seen < MIN_SHOWDOWNS) return null;
+    const head = `${BUCKET_WORD[bucket]} bets`;
+    let kind = "mixed";
+    let text = `${head}: no clear pattern (${r.strong} of ${r.seen} strong)`;
+    if (r.strong / r.seen >= AGREE.strong) {
+      kind = "strong";
+      text = `${head}: strong ${r.strong} of ${r.seen} times`;
+    } else if (r.weak / r.seen >= AGREE.weak) {
+      kind = "bluffy";
+      text = `${head}: often bluffs (${r.weak} of ${r.seen} weak)`;
+    }
+    return { bucket, seen: r.seen, strong: r.strong, weak: r.weak, kind, text };
+  }
+
   // src/ui/range-grid.ts
   var RANKS = "AKQJT98765432";
   var SHADE = "240,192,96";
@@ -2230,15 +2566,15 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return row < col ? `${RANKS[row]}${RANKS[col]}s` : `${RANKS[col]}${RANKS[row]}o`;
   }
   function classWeights(range) {
-    const sum = /* @__PURE__ */ new Map();
+    const sum2 = /* @__PURE__ */ new Map();
     const count = /* @__PURE__ */ new Map();
     for (let i = 0; i < COMBOS; i++) {
       const [a, b] = comboCards(i);
       const c = handClass(a, b);
-      sum.set(c, (sum.get(c) ?? 0) + range[i]);
+      sum2.set(c, (sum2.get(c) ?? 0) + range[i]);
       count.set(c, (count.get(c) ?? 0) + 1);
     }
-    return new Map([...sum].map(([c, s]) => [c, s / count.get(c)]));
+    return new Map([...sum2].map(([c, s]) => [c, s / count.get(c)]));
   }
   function generalRange(s) {
     return topPercent(blendedRates(s ?? freshStats(0, "")).vpip);
@@ -2286,10 +2622,10 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         grid.append(cell);
       }
     }
-    const sum = doc.createElement("div");
-    sum.className = "tp-rg-sum";
-    sum.textContent = `${summary}. Pairs run down the middle, suited hands sit above and offsuit hands below.`;
-    wrap.append(cap, grid, sum);
+    const sum2 = doc.createElement("div");
+    sum2.className = "tp-rg-sum";
+    sum2.textContent = `${summary}. Pairs run down the middle, suited hands sit above and offsuit hands below.`;
+    wrap.append(cap, grid, sum2);
     return wrap;
   }
 
@@ -2321,6 +2657,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
 #${CARDS_ID} .tp-note-help{color:${THEME.subtle};font-size:11px;margin:2px 0 6px}
 #${CARDS_ID} .tp-note-help.tp-bad{color:#ff8a8a}
 #${CARDS_ID} .tp-sec{color:#aaa;font-size:11px;margin:8px 0 3px}
+#${CARDS_ID} .tp-bs{color:#ddd;font-size:12px;font-variant-numeric:tabular-nums;padding:1px 0}
 #${CARDS_ID} .tp-sd{padding:4px 0;border-top:1px solid #333}
 #${CARDS_ID} .tp-sd-cards{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
 #${CARDS_ID} .tp-c{font-weight:700;color:#eee}
@@ -2462,6 +2799,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       labelPicker(doc, p),
       noteBox(doc, p)
     );
+    pop.append(betSizeList(doc, s?.betSizes));
     const shows = showdownList(doc, s?.showdowns ?? []);
     if (shows) pop.append(shows);
     pop.append(foot);
@@ -2473,8 +2811,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     const handsText = `${hands} ${hands === 1 ? "hand" : "hands"}`;
     const label = s?.label;
     if (label) {
-      const chip = el2("span", "tp-tag-label", LABELS[label].name);
-      chip.style.setProperty("--tp-label", LABELS[label].colour);
+      const chip = el2("span", "tp-tag-label", LABELS2[label].name);
+      chip.style.setProperty("--tp-label", LABELS2[label].colour);
       tag2.append(chip);
     }
     const note = s?.note ? ` Note: ${s.note}` : "";
@@ -2485,7 +2823,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       tag2.title = `${p.name}: ${STYLES[style].about} Plays ${Math.round(r.vpip)}% of hands, raises ${formatStat("pfr", r.pfr)} before the flop, over ${handsText}.${early ? " Early read: more hands will sharpen it." : ""}${note} Click for profile.`;
       tag2.setAttribute("aria-label", tag2.title.replace(" Click for profile.", " Opens the profile."));
     } else {
-      tag2.append(el2("span", "tp-tag-style", STYLES.Unknown.short), sep(), el2("span", "tp-tag-hands", "no hands yet"));
+      tag2.append(el2("span", "tp-tag-style", "New player"));
       tag2.title = `${p.name}: no hands seen yet.${note} Click for profile.`;
       tag2.setAttribute("aria-label", tag2.title.replace(" Click for profile.", " Opens the profile."));
     }
@@ -2518,10 +2856,10 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       const b = doc.createElement("button");
       b.type = "button";
       b.className = "tp-label-btn";
-      b.textContent = key ? LABELS[key].name : "None";
-      if (key) b.title = LABELS[key].help;
+      b.textContent = key ? LABELS2[key].name : "None";
+      if (key) b.title = LABELS2[key].help;
       b.setAttribute("aria-pressed", String(key === current));
-      if (key === current && key) b.style.setProperty("--tp-label", LABELS[key].colour);
+      if (key === current && key) b.style.setProperty("--tp-label", LABELS2[key].colour);
       b.addEventListener("click", () => {
         try {
           p.onLabel(key);
@@ -2577,6 +2915,21 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     });
     box.append(area, help);
     return box;
+  }
+  function betSizeList(doc, sizes) {
+    const wrap = doc.createElement("div");
+    const title = doc.createElement("div");
+    title.className = "tp-sec";
+    title.textContent = "Bet sizes";
+    wrap.append(title);
+    const lines = BUCKETS.map((b) => readBetSize(sizes, b)?.text).filter((t) => t !== void 0);
+    for (const text of lines.length ? lines : ["Not enough showdowns yet"]) {
+      const row = doc.createElement("div");
+      row.className = "tp-bs";
+      row.textContent = text;
+      wrap.append(row);
+    }
+    return wrap;
   }
   function showdownList(doc, list) {
     if (list.length === 0) return null;
@@ -2759,6 +3112,74 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return true;
   }
 
+  // src/ui/bet-keys.ts
+  var BET_KEYS = [
+    { key: "a", label: "advised", amount: (_r, a) => a.amount },
+    { key: "1", label: "min", amount: (r) => r.min },
+    { key: "2", label: "\xBD pot", amount: (r) => potSized(r, 0.5) },
+    { key: "3", label: "\u2154 pot", amount: (r) => potSized(r, 2 / 3) },
+    { key: "4", label: "pot", amount: (r) => potSized(r, 1) },
+    { key: "m", label: "max", amount: (r) => r.max }
+  ];
+  function betKeyAmount(key, r, a) {
+    const k = BET_KEYS.find((x) => x.key === key.toLowerCase());
+    const raw = k?.amount(r, a) ?? null;
+    if (raw === null || !Number.isFinite(raw)) return null;
+    return Math.min(r.max, Math.max(r.min, Math.round(raw)));
+  }
+  var NON_TEXT_INPUTS = /* @__PURE__ */ new Set(["range", "checkbox", "radio", "button", "submit", "reset", "image", "color", "file"]);
+  function isTypingTarget(target) {
+    const el2 = target;
+    if (!el2 || typeof el2.closest !== "function") return false;
+    const tag2 = el2.tagName;
+    if (tag2 === "TEXTAREA" || tag2 === "SELECT") return true;
+    if (tag2 === "INPUT") return !NON_TEXT_INPUTS.has(el2.type);
+    return !!el2.closest('[contenteditable]:not([contenteditable="false"])');
+  }
+  var STORAGE_KEY = "tp-bet-keys";
+  function loadKeysEnabled(win) {
+    try {
+      return win?.localStorage.getItem(STORAGE_KEY) !== "off";
+    } catch {
+      return true;
+    }
+  }
+  function saveKeysEnabled(win, on) {
+    try {
+      win?.localStorage.setItem(STORAGE_KEY, on ? "on" : "off");
+    } catch {
+    }
+  }
+  function buildKeyLegend(doc, enabled, onToggle) {
+    const wrap = doc.createElement("div");
+    wrap.className = "tp-keys";
+    const list = doc.createElement("span");
+    list.className = "tp-keys-list";
+    list.append("Keys: ");
+    BET_KEYS.forEach((k, i) => {
+      const kbd = doc.createElement("kbd");
+      kbd.textContent = k.key.toUpperCase();
+      list.append(kbd, ` ${k.label}${i < BET_KEYS.length - 1 ? " \xB7 " : ""}`);
+    });
+    const btn = doc.createElement("button");
+    btn.type = "button";
+    btn.className = "tp-keys-toggle";
+    let on = enabled;
+    const paint = () => {
+      btn.setAttribute("aria-pressed", String(on));
+      btn.textContent = on ? "Shortcuts on" : "Shortcuts off";
+      list.hidden = !on;
+    };
+    btn.addEventListener("click", () => {
+      on = !on;
+      paint();
+      onToggle(on);
+    });
+    paint();
+    wrap.append(list, btn);
+    return wrap;
+  }
+
   // src/ui/torn-hud.ts
   var SEL = {
     positioner: '[class*="panelPositioner___"]',
@@ -2794,6 +3215,10 @@ ${SHARED_CSS}${FOCUS_CSS}`;
 #${ROW_ID} .tp-bet-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:22px;border-radius:3px;border:1px solid #111;background:linear-gradient(#8a8a8a,#555 55%,#3d3d3d);box-shadow:0 1px 3px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.25);position:relative;z-index:2}
 #${ROW_ID} .tp-bet-range::-moz-range-thumb{width:14px;height:22px;border-radius:3px;border:1px solid #111;background:linear-gradient(#8a8a8a,#555 55%,#3d3d3d);box-shadow:0 1px 3px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.25)}
 #${ROW_ID} .tp-bet-range:hover::-webkit-slider-thumb{background:linear-gradient(#9a9a9a,#666 55%,#4a4a4a)}
+#${ROW_ID} .tp-keys{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin:4px 0 2px;font-size:12px;color:${THEME.subtle}}
+#${ROW_ID} .tp-keys kbd{display:inline-block;min-width:18px;padding:0 4px;border:1px solid #666;border-radius:3px;background:#2c2c2c;color:${THEME.text};font:600 11px/16px Arial,sans-serif;text-align:center}
+#${ROW_ID} .tp-keys-toggle{min-height:${MIN_TARGET}px;padding:0 8px;border:1px solid #4a4a4a;border-radius:5px;background:#2c2c2c;color:${THEME.text};font:12px Arial,sans-serif;cursor:pointer}
+#${ROW_ID} .tp-keys-toggle[aria-pressed="false"]{color:${THEME.subtle}}
 ${SEL.buttonsWrap} button.${ADVISED2}{box-shadow:inset 0 0 0 2px var(--tp-adv),0 0 10px var(--tp-adv)!important}
 #${TOGGLE_ID} button{display:flex;align-items:center;justify-content:center}
 #${TOGGLE_ID} button svg{width:16px;height:16px;fill:#9a9a9a}
@@ -2826,6 +3251,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   function mountTornHud(doc, panel) {
     const win = doc.defaultView;
     let shown = null;
+    let keysOn = loadKeysEnabled(win);
     const style = doc.createElement("style");
     style.id = STYLE_ID2;
     style.textContent = HUD_CSS;
@@ -2853,7 +3279,13 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       act.style.color = actionColor(a.action);
       line.append(label, act);
       row.append(line, buildMeters(doc, a));
-      if (bet && !preview) row.append(buildBetSlider(doc, a, bet, { chips: false }));
+      if (bet && !preview) {
+        row.append(buildBetSlider(doc, a, bet, { chips: false }));
+        row.append(buildKeyLegend(doc, keysOn, (on) => {
+          keysOn = on;
+          saveKeysEnabled(win, on);
+        }));
+      }
     }
     function makeToggle() {
       const wrap = doc.createElement("div");
@@ -2884,6 +3316,30 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       if (amount === null) return null;
       return Math.min(b.max, Math.max(b.min, amount));
     };
+    function fill(cur, amount) {
+      const event = cur.bet?.onChange(amount) ? new CustomEvent(SET_AMOUNT, { detail: amount }) : new CustomEvent(FILL_FAILED);
+      row.querySelector(".tp-bet")?.dispatchEvent(event);
+    }
+    function onKey(e) {
+      try {
+        if (!keysOn || e.ctrlKey || e.metaKey || e.altKey) return;
+        const cur = shown && !shown.preview && shown.bet ? shown : null;
+        if (!cur?.bet || isTypingTarget(e.target)) return;
+        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          if (e.target?.classList?.contains("tp-bet-range")) return;
+          e.preventDefault();
+          row.querySelector(".tp-bet")?.dispatchEvent(new CustomEvent(NUDGE, { detail: e.key === "ArrowUp" ? 1 : -1 }));
+          return;
+        }
+        const amount = betKeyAmount(e.key, cur.bet, cur.a);
+        if (amount === null) return;
+        e.preventDefault();
+        fill(cur, amount);
+      } catch (err) {
+        warn3("bet shortcut failed", err);
+      }
+    }
+    doc.addEventListener("keydown", onKey, true);
     function syncPresets() {
       const opts = q(SEL.betOptions);
       if (!opts) return;
@@ -2909,10 +3365,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
             try {
               const cur = shown && !shown.preview ? shown : null;
               const amt = cur ? presetAmount(key, cur) : null;
-              if (cur?.bet && amt !== null) {
-                const event = cur.bet.onChange(amt) ? new CustomEvent(SET_AMOUNT, { detail: amt }) : new CustomEvent(FILL_FAILED);
-                row.querySelector(".tp-bet")?.dispatchEvent(event);
-              }
+              if (cur?.bet && amt !== null) fill(cur, amt);
             } catch (e) {
               warn3("preset failed", e);
             }
@@ -3305,7 +3758,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     const heroIn = s.invested[s.heroId];
     if (toCall <= heroMoney || heroIn === void 0) return { pot: s.pot, toCall };
     const cap = heroIn + heroMoney;
-    const pot = Object.values(s.invested).reduce((sum, x) => sum + Math.min(x, cap), 0);
+    const pot = Object.values(s.invested).reduce((sum2, x) => sum2 + Math.min(x, cap), 0);
     return { pot, toCall: heroMoney };
   }
   var NO_RATES = { vpip: null, pfr: null, threeBet: null, foldToRaise: null, wtsd: null, af: null, cbet: null, foldToCbet: null };
@@ -3351,6 +3804,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         style: known ? readStyle(prof) : "Unknown",
         rates: known ? villainRates(prof) : NO_RATES,
         hands: prof?.hands ?? 0,
+        ...prof?.betSizes ? { betSizes: prof.betSizes } : {},
         actions: s.actions.filter((a) => a.userID === d.userID)
       });
     }
@@ -3358,9 +3812,12 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     let preflopRaises = 0;
     let lastAggressorId = null;
     let lastPreflopRaiserId = null;
+    let facedBet;
     for (const a of s.actions) {
       if (a.action === "raise" || a.action === "bet" || a.action === "allin" && a.handBetAfter > maxBet) {
         if (a.userID !== s.heroId) lastAggressorId = a.userID;
+        const f = a.street === "preflop" || a.userID === s.heroId ? null : betFraction(a, maxBet);
+        facedBet = f === null ? void 0 : bucketOf(f);
         if (a.street === "preflop") {
           preflopRaises += 1;
           lastPreflopRaiserId = a.userID;
@@ -3386,103 +3843,9 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       lastAggressor: villains.find((v) => v.userID === lastAggressorId) ?? null,
       inPosition,
       heroRaisedPreflop: lastPreflopRaiserId === s.heroId,
+      ...facedBet ? { facedBet } : {},
       heroCheckedThisStreet: s.actions.some((a) => a.userID === s.heroId && a.street === s.street && a.action === "check")
     };
-  }
-
-  // src/core/evaluator.ts
-  var CATEGORIES = [
-    "High card",
-    "Pair",
-    "Two pair",
-    "Trips",
-    "Straight",
-    "Flush",
-    "Full house",
-    "Quads",
-    "Straight flush"
-  ];
-  function categoryOf(value) {
-    return CATEGORIES[value >>> 20];
-  }
-  var counts = new Int8Array(13);
-  var suitMasks = new Int32Array(4);
-  function popcount(m) {
-    let n = 0;
-    while (m) {
-      m &= m - 1;
-      n++;
-    }
-    return n;
-  }
-  function straightHigh(mask) {
-    const m = mask << 1 | mask >> 12;
-    for (let h = 13; h >= 4; h--) {
-      if ((m >> h - 4 & 31) === 31) return h - 1;
-    }
-    return -1;
-  }
-  function topRanks(mask, n) {
-    let out = 0;
-    for (let r = 12; r >= 0 && n > 0; r--) {
-      if (mask & 1 << r) {
-        out = out << 4 | r;
-        n--;
-      }
-    }
-    return out;
-  }
-  function evaluate(cards) {
-    counts.fill(0);
-    suitMasks.fill(0);
-    let rankMask2 = 0;
-    for (let i = 0; i < cards.length; i++) {
-      const c = cards[i];
-      const r = c >> 2;
-      counts[r]++;
-      suitMasks[c & 3] |= 1 << r;
-      rankMask2 |= 1 << r;
-    }
-    for (let s = 0; s < 4; s++) {
-      const sm = suitMasks[s];
-      if (popcount(sm) >= 5) {
-        const sh2 = straightHigh(sm);
-        if (sh2 >= 0) return 8 << 20 | sh2;
-        return 5 << 20 | topRanks(sm, 5);
-      }
-    }
-    let quad = -1;
-    let trips = -1;
-    let pairA = -1;
-    let pairB = -1;
-    for (let r = 12; r >= 0; r--) {
-      const n = counts[r];
-      if (n === 4) quad = r;
-      else if (n === 3) {
-        if (trips < 0) trips = r;
-        else if (pairA < 0) pairA = r;
-      } else if (n === 2) {
-        if (pairA < 0) pairA = r;
-        else if (pairB < 0) pairB = r;
-      }
-    }
-    if (quad >= 0) {
-      return 7 << 20 | quad << 4 | topRanks(rankMask2 & ~(1 << quad), 1);
-    }
-    if (trips >= 0 && pairA >= 0) return 6 << 20 | trips << 4 | pairA;
-    const sh = straightHigh(rankMask2);
-    if (sh >= 0) return 4 << 20 | sh;
-    if (trips >= 0) {
-      return 3 << 20 | trips << 8 | topRanks(rankMask2 & ~(1 << trips), 2);
-    }
-    if (pairB >= 0) {
-      const used = 1 << pairA | 1 << pairB;
-      return 2 << 20 | pairA << 8 | pairB << 4 | topRanks(rankMask2 & ~used, 1);
-    }
-    if (pairA >= 0) {
-      return 1 << 20 | pairA << 16 | topRanks(rankMask2 & ~(1 << pairA), 3);
-    }
-    return topRanks(rankMask2, 5);
   }
 
   // src/core/equity.ts
@@ -3615,42 +3978,6 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       }
     }
     return sim.result();
-  }
-
-  // src/core/strength.ts
-  var classCombos = (cls) => cls.length === 2 ? 6 : cls.endsWith("s") ? 4 : 12;
-  function handStrength(hole, board) {
-    if (board.length < 3) return preflopStrength(hole);
-    const dead = /* @__PURE__ */ new Set([...hole, ...board]);
-    const mine = evaluate([...hole, ...board]);
-    let beat = 0;
-    let total2 = 0;
-    for (let i = 0; i < COMBOS; i++) {
-      const [a, b] = comboCards(i);
-      if (dead.has(a) || dead.has(b)) continue;
-      const theirs = evaluate([a, b, ...board]);
-      total2++;
-      if (mine > theirs) beat += 1;
-      else if (mine === theirs) beat += 0.5;
-    }
-    const value = total2 > 0 ? beat / total2 : 0;
-    return { value, note: `Beats ${Math.round(value * 100)}% of hands` };
-  }
-  function preflopStrength(hole) {
-    const cls = handClass(hole[0], hole[1]);
-    let before = 0;
-    for (const c of PREFLOP_ORDER) {
-      if (c === cls) break;
-      before += classCombos(c);
-    }
-    const mine = classCombos(cls);
-    const value = 1 - (before + mine / 2) / COMBOS;
-    if (value >= 0.5) {
-      const top = Math.max(1, Math.round((before + mine) / COMBOS * 100));
-      return { value, note: `Top ${top}% of starting hands` };
-    }
-    const bottom = Math.max(1, Math.round((1 - before / COMBOS) * 100));
-    return { value, note: `Bottom ${bottom}% of starting hands` };
   }
 
   // src/core/draws.ts
@@ -4241,6 +4568,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return only;
   }
   var CBET = { bluffAt: 60, noBluffAt: 30 };
+  var SIZE_READ_SHIFT = { strong: 0.1, bluffy: -0.05, mixed: 0 };
   function decidePostflop(ctx, eq) {
     const n = ctx.villains.length;
     const equity = eq.equity;
@@ -4271,13 +4599,32 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           detail: [band.commit ? "All-in for value." : "Raise to 3\xD7 the bet for value.", ...sprWhy(moved)]
         });
       }
-      const callAt = potOdds + 0.03;
+      const baseCallAt = potOdds + 0.03;
+      const sizeRead = ctx.facedBet ? readBetSize(aggressor?.betSizes, ctx.facedBet) : null;
+      const callAt = baseCallAt + (sizeRead ? SIZE_READ_SHIFT[sizeRead.kind] : 0);
+      const readDetail = sizeRead ? [`${sizeRead.text} (${name}).`] : [];
       if (equity >= callAt) {
-        return build(ctx, eq, { action: "call", amount: null, reason: callCopy(eq, potOdds), threshold: callAt, detail: [] });
+        const flipped = sizeRead?.kind === "bluffy" && equity < baseCallAt;
+        return build(ctx, eq, {
+          action: "call",
+          amount: null,
+          reason: flipped ? `${name}'s ${BUCKET_WORD[sizeRead.bucket].toLowerCase()} bets are often bluffs (${sizeRead.weak} of ${sizeRead.seen} weak) \u2014 call.` : callCopy(eq, potOdds),
+          threshold: callAt,
+          detail: readDetail
+        });
+      }
+      if (sizeRead?.kind === "strong" && equity >= baseCallAt) {
+        return build(ctx, eq, {
+          action: "fold",
+          amount: null,
+          reason: `${name}'s ${BUCKET_WORD[sizeRead.bucket].toLowerCase()} bets have been strong ${sizeRead.strong} of ${sizeRead.seen} times \u2014 fold.`,
+          threshold: callAt,
+          detail: readDetail
+        });
       }
       const draw = describeHand(ctx.heroCards, ctx.board).draw;
       const folds2 = aggressor?.rates.foldToRaise ?? null;
-      if (draw && ctx.street !== "river" && folds2 !== null && folds2 >= 55 && bluffOk(raiseTo)) {
+      if (draw && ctx.street !== "river" && sizeRead?.kind !== "strong" && folds2 !== null && folds2 >= 55 && bluffOk(raiseTo)) {
         return build(ctx, eq, {
           action: "raise",
           amount: raiseTo,
@@ -4286,7 +4633,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
           detail: [`Semi-bluff with a ${draw}: raise to 3\xD7 the bet.`]
         });
       }
-      return build(ctx, eq, { action: "fold", amount: null, reason: foldCopy(eq, potOdds), threshold: callAt, detail: [] });
+      return build(ctx, eq, { action: "fold", amount: null, reason: foldCopy(eq, potOdds), threshold: callAt, detail: readDetail });
     }
     const target = targetOf(ctx);
     const { at: betAt, moved: betMoved } = bar(valueThreshold(0.6, 0.45, n));
@@ -4478,7 +4825,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   var SAVE_DELAY_MS2 = 3e4;
   var MAX_PROFILES = 5e3;
   var MAX_NOTE_LENGTH = 500;
-  var VERSION = 3;
+  var VERSION = 4;
   var num2 = (v) => typeof v === "number" && Number.isFinite(v);
   function isCounter(v) {
     if (v === null || typeof v !== "object") return false;
@@ -4491,12 +4838,13 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     return num2(s.userID) && typeof s.name === "string" && num2(s.hands) && isCounter(s.vpip) && isCounter(s.pfr) && isCounter(s.threeBet) && isCounter(s.foldToRaise) && isCounter(s.wtsd) && num2(s.postAggr) && num2(s.postCalls) && num2(s.lastSeen);
   }
   function cleaned(s) {
-    const { note, label, showdowns, cbet, foldToCbet, ...core } = s;
+    const { note, label, showdowns, betSizes, cbet, foldToCbet, ...core } = s;
     const out = { ...core };
     if (isCounter(cbet)) out.cbet = cbet;
     if (isCounter(foldToCbet)) out.foldToCbet = foldToCbet;
     if (typeof note === "string" && note.trim()) out.note = note.slice(0, MAX_NOTE_LENGTH);
     if (isLabel(label)) out.label = label;
+    if (isBetSizes(betSizes)) out.betSizes = betSizes;
     if (Array.isArray(showdowns)) {
       const good = showdowns.filter(isShowdown).slice(0, MAX_SHOWDOWNS);
       if (good.length) out.showdowns = good;
@@ -4506,7 +4854,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   function validProfiles(v) {
     if (v === null || typeof v !== "object") return null;
     const o = v;
-    if (o.version !== 1 && o.version !== 2 && o.version !== VERSION || !Array.isArray(o.profiles)) return null;
+    if (o.version !== 1 && o.version !== 2 && o.version !== 3 && o.version !== VERSION || !Array.isArray(o.profiles)) return null;
     return o.profiles.filter(isStats).map(cleaned);
   }
   var ProfileStore = class {
@@ -4536,6 +4884,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         if (!next) continue;
         const sd = showdownFor(hand, p.userID);
         if (sd) next = { ...next, showdowns: addShowdown(next.showdowns, sd) };
+        const sizes = addBetSizes(next.betSizes, hand, p.userID);
+        if (sizes) next = { ...next, betSizes: sizes };
         this.profiles.set(p.userID, next);
       }
       this.prune();
