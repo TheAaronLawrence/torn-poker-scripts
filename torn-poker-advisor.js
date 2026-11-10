@@ -2332,7 +2332,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
 #${CARDS_ID} .tp-card.tp-flip .tp-pop{left:auto;right:0}
 #${CARDS_ID} .tp-card.tp-above .tp-pop{top:100%}
 #${CARDS_ID} .tp-card.tp-below .tp-pop{bottom:100%}
-#${CARDS_ID} .tp-pop{max-height:70vh;overflow-y:auto;overscroll-behavior:contain}
+#${CARDS_ID} .tp-pop{max-height:min(70vh,var(--tp-pop-room,70vh));overflow-y:auto;overscroll-behavior:contain}
 #${CARDS_ID} .tp-card:hover .tp-pop,#${CARDS_ID} .tp-card.tp-open .tp-pop{display:block}
 #${CARDS_ID} .tp-pop-close{display:none;float:right;min-width:${MIN_TARGET}px;min-height:${MIN_TARGET}px;margin:-4px -4px 0 4px;border:0;border-radius:4px;background:none;color:#ddd;font:16px/1 sans-serif;cursor:pointer}
 #${CARDS_ID} .tp-pop-close:hover{background:rgba(255,255,255,.12)}
@@ -2627,10 +2627,16 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     wrap.classList.toggle("tp-above", above);
     wrap.classList.toggle("tp-below", !above);
     wrap.classList.toggle("tp-flip", rect.left + CARD_WIDTH > vw);
+    const top = Math.min(Math.max(rawTop, sy), maxTop);
     wrap.style.width = `${rect.width}px`;
     wrap.style.left = `${Math.min(Math.max(rect.left + sx, sx), maxLeft)}px`;
-    wrap.style.top = `${Math.min(Math.max(rawTop, sy), maxTop)}px`;
+    wrap.style.top = `${top}px`;
+    const tagTop = top - sy;
+    const room = above ? vh - (tagTop + TAG_HEIGHT) - POP_MARGIN : tagTop - POP_MARGIN;
+    if (Number.isFinite(room)) wrap.style.setProperty("--tp-pop-room", `${Math.max(MIN_POP_ROOM, Math.floor(room))}px`);
   }
+  var POP_MARGIN = 8;
+  var MIN_POP_ROOM = 160;
   var BOX_SELECTOR = '[class*="additionalBox"], [class*="detailsBox"]';
   function anchorRect(seat) {
     let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
