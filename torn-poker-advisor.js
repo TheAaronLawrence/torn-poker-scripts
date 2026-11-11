@@ -1460,14 +1460,6 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     { name: "medium", maxBB: 40, bluffShare: 0.33, label: "medium stack" },
     { name: "deep", maxBB: Infinity, bluffShare: Infinity, label: "deep stack" }
   ];
-  var SPR_BANDS = [
-    { maxSpr: 3, valueShift: -0.08, commit: true },
-    { maxSpr: 13, valueShift: 0, commit: false },
-    { maxSpr: Infinity, valueShift: 0.04, commit: false }
-  ];
-  function sprBand(spr) {
-    return SPR_BANDS.find((b) => spr !== null && spr <= b.maxSpr) ?? SPR_BANDS[1];
-  }
   function depthOf(ctx) {
     const deepest = Math.max(0, ...ctx.villains.map((v) => v.stack));
     const chips = deepest > 0 ? Math.min(ctx.heroStack, deepest) : ctx.heroStack;
@@ -4479,6 +4471,13 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     if (total(range) <= 0) return start;
     return removeDead(range, dead);
   }
+  var callRate = (style) => PARAMS[style].call;
+  function callingRange(range, board, share) {
+    const sc = scores(range, strengthOn(board));
+    const out = new Float32Array(COMBOS);
+    for (let i = 0; i < COMBOS; i++) if (range[i] > 0 && sc[i] >= 1 - share) out[i] = range[i];
+    return total(out) > 0 ? out : range;
+  }
 
   // src/advice/describe.ts
   var SINGULAR = ["Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Jack", "Queen", "King", "Ace"];
@@ -4605,6 +4604,52 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       if (draw) label += ` + ${draw}`;
     }
     return { label, draw, category };
+  }
+
+  // src/advice/value-bet.ts
+  var defendShare = (fraction) => 1 / (1 + fraction);
+  var TYPICAL_FRACTION = 0.6;
+  function callShare(v, fraction) {
+    const scaled = callRate(v.style) * defendShare(fraction) / defendShare(TYPICAL_FRACTION);
+    return Math.min(1, Math.max(0.05, scaled));
+  }
+  function costs(ctx, amount) {
+    return { hero: amount - ctx.heroStreetBet, caller: amount - (ctx.heroStreetBet + ctx.toCall) };
+  }
+  function fractionOf(ctx, amount) {
+    const { hero, caller } = costs(ctx, amount);
+    const before = ctx.pot + hero - caller;
+    return before > 0 ? caller / before : 1;
+  }
+  async function calledEquities(ctx, ranges, amounts, run) {
+    const out = [];
+    for (const amount of amounts) {
+      const shares = ctx.villains.map((v) => callShare(v, fractionOf(ctx, amount)));
+      const eq = await run(ranges.map((r, i) => callingRange(r, ctx.board, shares[i])));
+      if (eq.samples > 0) out.push({ amount, shares, equity: eq.equity });
+    }
+    return out;
+  }
+  function betValue(ctx, c) {
+    const allFold = c.shares.reduce((p, s) => p * (1 - s), 1);
+    const { hero, caller } = costs(ctx, c.amount);
+    const calledPot = ctx.pot + hero + caller * c.shares.length;
+    return allFold * ctx.pot + (1 - allFold) * (c.equity * calledPot - hero);
+  }
+  function passiveValue(ctx, equity) {
+    return ctx.toCall > 0 ? equity * (ctx.pot + ctx.toCall) - ctx.toCall : equity * ctx.pot;
+  }
+  function bestValueBet(ctx, equity, called) {
+    let best = null;
+    let bestValue = passiveValue(ctx, equity);
+    for (const c of called) {
+      const v = betValue(ctx, c);
+      if (v > bestValue) {
+        best = c;
+        bestValue = v;
+      }
+    }
+    return best;
   }
 
   // src/advice/decide.ts
@@ -4852,34 +4897,50 @@ ${SHARED_CSS}${FOCUS_CSS}`;
   }
   var CBET = { bluffAt: 60, noBluffAt: 30 };
   var SIZE_READ_SHIFT = { strong: 0.1, bluffy: -0.05, mixed: 0 };
-  function decidePostflop(ctx, eq) {
+  function valueAmounts(ctx) {
+    const all = allInTotal(ctx);
+    const sizes = ctx.toCall > 0 ? [3 * betLevel(ctx), 5 * betLevel(ctx)] : [valueBetFraction(targetOf(ctx)?.style ?? "Unknown") * ctx.pot, ctx.pot, 1.5 * ctx.pot];
+    const leavesRoom = (a) => all - a >= 0.5 * (ctx.pot + 2 * a);
+    const rounded = sizes.map(roundAmount).filter((a) => a > betLevel(ctx) && leavesRoom(a));
+    return [.../* @__PURE__ */ new Set([...rounded, all])];
+  }
+  function valueBetFraction(style) {
+    return style === "Calling station" ? 0.75 : style === "Rock" ? 0.5 : 0.6;
+  }
+  var potMultiple = (amount, ctx) => `${Number((amount / ctx.pot).toFixed(1))}\xD7 the pot`;
+  function valueSize(ctx, equity, usual, called) {
+    if (!called) return { amount: usual, detail: [] };
+    const best = bestValueBet(ctx, equity, called);
+    if (!best) return null;
+    const share = best.shares.reduce((a, b) => a + b, 0) / best.shares.length;
+    const allIn = best.amount >= allInTotal(ctx);
+    return {
+      amount: best.amount,
+      detail: [
+        `${allIn ? "All-in" : ctx.toCall > 0 ? `Raise to ${bbText(best.amount / ctx.bigBlind)}` : `Bet ${potMultiple(best.amount, ctx)}`}: called by about ${pct4(share)}% of their hands, and you win ${pct4(best.equity)}% of those.`
+      ]
+    };
+  }
+  function decidePostflop(ctx, eq, called) {
     const n = ctx.villains.length;
     const equity = eq.equity;
     const depth = depthOf(ctx);
-    const band = sprBand(depth.spr);
-    const sprText = depth.spr === null ? "" : ` (stack-to-pot ratio ${Number(depth.spr.toFixed(1))})`;
     const bluffOk = (amount) => amount <= tierOf(depth).bluffShare * (depth.stackBB * ctx.bigBlind);
-    const bar = (base) => {
-      const at = base + band.valueShift;
-      return { at, moved: band.valueShift !== 0 && equity >= at !== equity >= base };
-    };
-    const sprWhy = (moved) => moved ? [band.valueShift < 0 ? `The stack is small next to the pot${sprText}, so a hand this good is worth getting all-in.` : `The stack is big next to the pot${sprText}, so this hand needs to be stronger before putting in more.`] : [];
-    const valueAmount = (amount) => band.commit ? allInTotal(ctx) : amount;
     if (ctx.toCall > 0) {
       const potOdds = potOddsOf(ctx);
       const aggressor = ctx.lastAggressor ?? ctx.villains[0] ?? null;
-      const style = aggressor?.style ?? "Unknown";
+      const style2 = aggressor?.style ?? "Unknown";
       const name = aggressor?.name ?? "the bettor";
-      const base = valueThreshold(style === "Aggro" || style === "Maniac" ? 0.6 : 0.7, 0.5, n);
-      const { at: raiseAt, moved } = bar(base);
+      const raiseAt = valueThreshold(style2 === "Aggro" || style2 === "Maniac" ? 0.6 : 0.7, 0.5, n);
       const raiseTo = roundAmount(3 * betLevel(ctx));
-      if (equity >= raiseAt) {
+      const raise = equity >= raiseAt ? valueSize(ctx, equity, raiseTo, called) : null;
+      if (raise) {
         return build(ctx, eq, {
           action: "raise",
-          amount: valueAmount(raiseTo),
-          reason: ctx.heroCheckedThisStreet ? `Check-raise \u2014 the trap worked. Raise ${name} for value.` : valueCopy(name, style),
+          amount: raise.amount,
+          reason: ctx.heroCheckedThisStreet ? `Check-raise \u2014 the trap worked. Raise ${name} for value.` : valueCopy(name, style2),
           threshold: raiseAt,
-          detail: [band.commit ? "All-in for value." : "Raise to 3\xD7 the bet for value.", ...sprWhy(moved)]
+          detail: raise.detail.length ? raise.detail : ["Raise to 3\xD7 the bet for value."]
         });
       }
       const baseCallAt = potOdds + 0.03;
@@ -4919,7 +4980,7 @@ ${SHARED_CSS}${FOCUS_CSS}`;
       return build(ctx, eq, { action: "fold", amount: null, reason: foldCopy(eq, potOdds), threshold: callAt, detail: readDetail });
     }
     const target = targetOf(ctx);
-    const { at: betAt, moved: betMoved } = bar(valueThreshold(0.6, 0.45, n));
+    const betAt = valueThreshold(0.6, 0.45, n);
     const trap = equity >= betAt ? trapTarget(ctx, equity) : null;
     if (trap) {
       return build(ctx, eq, {
@@ -4930,15 +4991,16 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         detail: ["Check now, raise if they bet."]
       });
     }
-    if (equity >= betAt) {
-      const style = target?.style ?? "Unknown";
-      const size = style === "Calling station" ? 0.75 : style === "Rock" ? 0.5 : 0.6;
+    const style = target?.style ?? "Unknown";
+    const size = valueBetFraction(style);
+    const bet = equity >= betAt ? valueSize(ctx, equity, roundAmount(size * ctx.pot), called) : null;
+    if (bet) {
       return build(ctx, eq, {
         action: "bet",
-        amount: valueAmount(roundAmount(size * ctx.pot)),
+        amount: bet.amount,
         reason: valueCopy(target?.name ?? "the field", style),
         threshold: betAt,
-        detail: [band.commit ? "Bet all-in." : `Bet ${size}\xD7 the pot${style === "Unknown" ? "" : ` against a ${style}`}.`, ...sprWhy(betMoved)]
+        detail: bet.detail.length ? bet.detail : [`Bet ${size}\xD7 the pot${style === "Unknown" ? "" : ` against a ${style}`}.`]
       });
     }
     const only = ctx.villains.length === 1 ? ctx.villains[0] : null;
@@ -4963,7 +5025,14 @@ ${SHARED_CSS}${FOCUS_CSS}`;
         detail: ["Bluff half the pot."]
       });
     }
-    return build(ctx, eq, { action: "check", amount: null, reason: CHECK_COPY, threshold: betAt, detail: [] });
+    const onlyBetterCall = equity >= betAt && !bet;
+    return build(ctx, eq, {
+      action: "check",
+      amount: null,
+      reason: onlyBetterCall ? "Ahead of their hands overall, but behind the ones that would call a bet \u2014 check." : CHECK_COPY,
+      threshold: betAt,
+      detail: []
+    });
   }
   var SHOWDOWN_WARNING = "If you lose, Torn shows your cards to the table.";
   function legalize(a, ctx) {
@@ -5125,7 +5194,8 @@ ${SHARED_CSS}${FOCUS_CSS}`;
     const bettorIdx = bettor ? ctx.villains.indexOf(bettor) : -1;
     const bettorRead = bettorIdx >= 0 ? readRange(ranges[bettorIdx], ctx.board, [...ctx.heroCards, ...ctx.board]) : null;
     if (!fellBack) opts.onRanges?.(new Map(ctx.villains.map((v, i) => [v.userID, ranges[i]])));
-    const decided = preflop ? decidePreflop(ctx, eq) : decidePostflop(ctx, eq);
+    const called = preflop || fellBack ? void 0 : await calledEquities(ctx, ranges, valueAmounts(ctx), run);
+    const decided = preflop ? decidePreflop(ctx, eq) : decidePostflop(ctx, eq, called);
     const rangeLines = ctx.villains.map((v, i) => {
       const combos = rangePercent(ranges[i]) / 100 * COMBOS;
       return `${v.name} (${v.style}): ~${Math.round(rangePercent(ranges[i]))}% of hands, ${Math.round(combos)} combos`;
